@@ -1,3 +1,9 @@
+# Path to the root of your installation
+root /usr/local/www/nextcloud/;
+
+# Prevent nginx HTTP Server Detection
+server_tokens off;
+
 # set max upload size
 client_max_body_size 512M;
 fastcgi_buffers 64 4K;
@@ -14,20 +20,22 @@ gzip_types application/atom+xml application/javascript application/json applicat
 # with the `ngx_pagespeed` module, uncomment this line to disable it.
 #pagespeed off;
 
+# The settings allows you to optimize the HTTP2 bandwitdth.
+# See https://blog.cloudflare.com/delivering-http-2-upload-speed-improvements/
+# for tunning hints
+client_body_buffer_size 512k;
+
 # HTTP response headers borrowed from Nextcloud `.htaccess`
 add_header Referrer-Policy                      "no-referrer"   always;
 add_header X-Content-Type-Options               "nosniff"       always;
 add_header X-Download-Options                   "noopen"        always;
 add_header X-Frame-Options                      "SAMEORIGIN"    always;
 add_header X-Permitted-Cross-Domain-Policies    "none"          always;
-add_header X-Robots-Tag                         "none"          always;
+add_header X-Robots-Tag                         "noindex, nofollow" always
 add_header X-XSS-Protection                     "1; mode=block" always;
 
 # Remove X-Powered-By, which is an information leak
 fastcgi_hide_header X-Powered-By;
-
-# Path to the root of your installation
-root /usr/local/www/nextcloud/;
 
 # Specify how to handle directories -- specifying `/index.php$request_uri`
 # here as the fallback means that Nginx always exhibits the desired behaviour
