@@ -14,10 +14,10 @@ then
 fi
 
 # Generate nginx configuration from the base template
-SCHEME=https
-if [ "${ALLOW_INSECURE_ACCESS:-false}" = "true" ]
+SCHEME=http
+if [ "${ALLOW_INSECURE_ACCESS:-true}" = "false" ]
 then
-	SCHEME=http
+	SCHEME=https
 fi
 
 envsubst "\${NEXTCLOUD_HTTPS_PORT}" < "/usr/local/etc/nginx/conf.d/nextcloud.$SCHEME.conf.template" > "/usr/local/etc/nginx/conf.d/nextcloud.conf"
