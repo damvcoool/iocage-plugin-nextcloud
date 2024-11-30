@@ -5,11 +5,11 @@ set -eu
 # Load environment variable from /etc/iocage-env
 . load_env
 
-# Generate some configuration from templates.
-sync_configuration
-
 # Generate self-signed TLS certificates
 generate_self_signed_tls_certificates
+
+# Generate some configuration from templates.
+sync_configuration
 
 # Enable the necessary services
 sysrc -f /etc/rc.conf nginx_enable="YES"
@@ -73,12 +73,12 @@ su -m www -c "php /usr/local/www/nextcloud/occ background:cron"
 
 su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-indices"
 
-su -m www -c "php /usr/local/www/nextcloud/occ config:system:set trusted_domains 1 --value='${IOCAGE_HOST_ADDRESS}'"
-
 su -m www -c "php /usr/local/www/nextcloud/occ app:install contacts"
 su -m www -c "php /usr/local/www/nextcloud/occ app:install calendar"
 su -m www -c "php /usr/local/www/nextcloud/occ app:install notes"
 su -m www -c "php /usr/local/www/nextcloud/occ app:install deck"
+
+su -m www -c "php /usr/local/www/nextcloud/occ config:system:set trusted_domains 1 --value='${IOCAGE_HOST_ADDRESS}'"
 
 # create sessions tmp dir outside nextcloud installation
 mkdir -p /usr/local/www/nextcloud-sessions-tmp >/dev/null 2>/dev/null
