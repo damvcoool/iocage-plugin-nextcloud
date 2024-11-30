@@ -18,6 +18,8 @@ sysrc -f /etc/rc.conf php_fpm_enable="YES"
 sysrc -f /etc/rc.conf redis_enable="YES"
 sysrc -f /etc/rc.conf fail2ban_enable="YES"
 
+chmod 777 /tmp
+
 # Start the service
 service nginx start 2>/dev/null
 service php_fpm start 2>/dev/null
