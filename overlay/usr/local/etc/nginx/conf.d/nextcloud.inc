@@ -37,6 +37,12 @@ add_header X-XSS-Protection                     "1; mode=block" always;
 # Remove X-Powered-By, which is an information leak
 fastcgi_hide_header X-Powered-By;
 
+# Add .mjs as a file extension for javascript
+include mime.types;
+types {
+    application/javascript mjs;
+}
+
 # Specify how to handle directories -- specifying `/index.php$request_uri`
 # here as the fallback means that Nginx always exhibits the desired behaviour
 # when a client requests a path that corresponds to a directory that exists
