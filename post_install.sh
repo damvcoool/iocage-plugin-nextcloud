@@ -20,7 +20,7 @@ sysrc -f /etc/rc.conf fail2ban_enable="YES"
 
 # Start the service
 service nginx start 2>/dev/null
-service php-fpm start 2>/dev/null
+service php_fpm start 2>/dev/null
 service mysql-server start 2>/dev/null
 service redis start 2>/dev/null
 
