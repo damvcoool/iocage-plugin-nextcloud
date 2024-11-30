@@ -31,7 +31,7 @@ add_header X-Content-Type-Options               "nosniff"       always;
 add_header X-Download-Options                   "noopen"        always;
 add_header X-Frame-Options                      "SAMEORIGIN"    always;
 add_header X-Permitted-Cross-Domain-Policies    "none"          always;
-add_header X-Robots-Tag                         "noindex, nofollow" always
+add_header X-Robots-Tag                         "noindex, nofollow" always;
 add_header X-XSS-Protection                     "1; mode=block" always;
 
 # Remove X-Powered-By, which is an information leak
