@@ -16,6 +16,7 @@ export IOCAGE_HOST_PORT_HTTPS=443
 export IOCAGE_JAIL_PORT_HTTPS=443
 export IOCAGE_HOST_ADDRESS
 export IOCAGE_HOST_ADDRESS_BCAST
+export ALLOW_INSECURE_ACCESS=true
 
 if [ ! -e "/etc/iocage-env" ]
 then
