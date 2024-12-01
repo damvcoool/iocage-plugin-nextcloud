@@ -117,9 +117,11 @@ location ~ \.php(?:$|/) {
 
     fastcgi_intercept_errors on;
     fastcgi_request_buffering off;
+	
+	fastcgi_max_temp_file_size 0;
 }
 
-location ~ \.(?:css|js|svg|gif|png|jpg|ico)$ {
+location ~ \.(?:css|js|svg|gif|png|jpg|ico|wasm|tflite|map)$ {
     try_files $uri /index.php$request_uri;
     expires 6M;         # Cache-Control policy borrowed from `.htaccess`
     access_log off;     # Optional: Don't log access to assets
@@ -127,8 +129,12 @@ location ~ \.(?:css|js|svg|gif|png|jpg|ico)$ {
 
 location ~ \.woff2?$ {
     try_files $uri /index.php$request_uri;
-    expires 7d;         # Cache-Control policy borrowed from `.htaccess`
+    add_header Cache-Control "public, max-age=15778463, $asset_immutable";
     access_log off;     # Optional: Don't log access to assets
+	
+	location ~ \.wasm$ {
+		default_type application/wasm;
+    }
 }
 
 # Rule borrowed from `.htaccess`
