@@ -4,23 +4,31 @@ set -eu
 
 . load_env
 
+NGINX_CONFD_PATH=/usr/local/etc/nginx/conf.d
+OCPS_CONF="${NGINX_CONFD_PATH}/ocps-stapling.conf"
+
 # Two cases:
 # - Nextcloud is accessed through <domain_name>: use port 443
 # - Nextcloud is accessed through <ip>:<port>: use port $IOCAGE_HOST_PORT_HTTPS
 export NEXTCLOUD_HTTPS_PORT=443
-if certbot certificates | grep "No certificates found."
-then
-	NEXTCLOUD_HTTPS_PORT=$IOCAGE_HOST_PORT_HTTPS
+if certbot certificates | grep "No certificates found."; then
+    NEXTCLOUD_HTTPS_PORT=$IOCAGE_HOST_PORT_HTTPS
+    # disable OCPS stapling
+    rm -f "$OCPS_CONF"
+else
+    # using letsencrypt so enable OCSP stapling
+    ln -s "${OCPS_CONF}.template" "$OCPS_CONF"
 fi
 
 # Generate nginx configuration from the base template
 SCHEME=http
-if [ "${ALLOW_INSECURE_ACCESS:-true}" = "false" ]
+if [ "${ALLOW_INSECURE_ACCESS:-false}" = "true" ]; 
 then
-	SCHEME=https
+    SCHEME=http
 fi
 
-envsubst "\${NEXTCLOUD_HTTPS_PORT}" < "/usr/local/etc/nginx/conf.d/nextcloud.$SCHEME.conf.template" > "/usr/local/etc/nginx/conf.d/nextcloud.conf"
+NEXTCLOUD_CONF="${NGINX_CONFD_PATH}/nextcloud.${SCHEME}.conf"
+envsubst '$NEXTCLOUD_HTTPS_PORT' <"${NEXTCLOUD_CONF}.template" >"$NEXTCLOUD_CONF"
 
 # Copy Nextcloud custom configuration
 cp /root/config/truenas.config.php /usr/local/www/nextcloud/config/truenas.config.php
