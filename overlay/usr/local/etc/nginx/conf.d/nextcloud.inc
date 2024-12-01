@@ -14,7 +14,7 @@ gzip_vary on;
 gzip_comp_level 4;
 gzip_min_length 256;
 gzip_proxied expired no-cache no-store private no_last_modified no_etag auth;
-gzip_types application/atom+xml application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
+gzip_types application/atom+xml application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/wasm application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/javascript text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
 
 # Pagespeed is not supported by Nextcloud, so if your server is built
 # with the `ngx_pagespeed` module, uncomment this line to disable it.
@@ -121,20 +121,25 @@ location ~ \.php(?:$|/) {
 	fastcgi_max_temp_file_size 0;
 }
 
-location ~ \.(?:css|js|svg|gif|png|jpg|ico|wasm|tflite|map)$ {
+location ~ \.(?:css|js|mjs|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
     try_files $uri /index.php$request_uri;
-    expires 6M;         # Cache-Control policy borrowed from `.htaccess`
+    add_header Cache-Control "public, max-age=15778463, $asset_immutable";
+	add_header Referrer-Policy                   "no-referrer"       always;
+    add_header X-Content-Type-Options            "nosniff"           always;
+    add_header X-Frame-Options                   "SAMEORIGIN"        always;
+    add_header X-Permitted-Cross-Domain-Policies "none"              always;
+    add_header X-Robots-Tag                      "noindex, nofollow" always;
+    add_header X-XSS-Protection                  "1; mode=block"     always;
     access_log off;     # Optional: Don't log access to assets
+	location ~ \.wasm$ {
+		default_type application/wasm;
+    }
 }
 
 location ~ \.woff2?$ {
     try_files $uri /index.php$request_uri;
-    add_header Cache-Control "public, max-age=15778463, $asset_immutable";
+    expires 7d;         # Cache-Control policy borrowed from `.htaccess`
     access_log off;     # Optional: Don't log access to assets
-	
-	location ~ \.wasm$ {
-		default_type application/wasm;
-    }
 }
 
 # Rule borrowed from `.htaccess`
