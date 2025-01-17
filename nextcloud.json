@@ -1,0 +1,36 @@
+{
+    "name": "Nextcloud",
+    "plugin_schema": "2",
+    "release": "13.4-RELEASE",
+    "artifact": "https://github.com/damvcoool/iocage-plugin-nextcloud.git",
+    "official": false,
+    "properties": {
+        "vnet": 1,
+        "dhcp": 1
+    },
+    "pkgs": [
+        "ffmpeg",
+        "nextcloud-php84",
+        "php84-pecl-imagick",
+        "php84-bcmath",
+        "php84-gmp",
+        "php84-pcntl",
+        "php84-pecl-redis",
+        "php84-phar",
+        "nginx",
+        "mysql84-server",
+        "redis",
+        "py311-fail2ban",
+        "py311-certbot"
+    ],
+    "packagesite": "http://pkg.FreeBSD.org/${ABI}/latest",
+    "fingerprints": {
+        "iocage-plugins": [
+            {
+                "function": "sha256",
+                "fingerprint": "b0170035af3acc5f3f3ae1859dc717101b4e6c1d0a794ad554928ca0cbb2f438"
+            }
+        ]
+    },
+    "revision": "1"
+}
