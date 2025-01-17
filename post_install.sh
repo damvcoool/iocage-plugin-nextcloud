@@ -14,7 +14,6 @@ then
 	generate_self_signed_tls_certificates
 fi
 
-
 # Enable the necessary services
 sysrc -f /etc/rc.conf nginx_enable="YES"
 sysrc -f /etc/rc.conf mysql_enable="YES"
