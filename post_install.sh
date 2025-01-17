@@ -6,7 +6,7 @@ set -xeu
 . load_env
 
 # Generate self-signed TLS certificates
-generate_self_signed_tls_certificates
+#generate_self_signed_tls_certificates
 
 # Generate some configuration from templates.
 sync_configuration
