@@ -110,7 +110,7 @@ su -m www -c "php /usr/local/www/nextcloud/occ app:install notes" || echo "Warni
 su -m www -c "php /usr/local/www/nextcloud/occ app:install deck" || echo "Warning: Failed to install deck app"
 
 echo "Setting trusted domains..."
-su -m www -c "php /usr/local/www/nextcloud/occ config:system:set trusted_domains 1 --value='${IOCAGE_HOST_ADDRESS}'"
+su -m www -c "php /usr/local/www/nextcloud/occ config:system:set trusted_domains 1 --value='${IOCAGE_JAIL_IP}'"
 
 # create sessions tmp dir outside nextcloud installation
 mkdir -p /usr/local/www/nextcloud-sessions-tmp >/dev/null 2>/dev/null
@@ -148,13 +148,13 @@ echo "Nextcloud installation completed!"
 echo "=========================================="
 echo "You can access Nextcloud at:"
 if [ "${ALLOW_INSECURE_ACCESS:-false}" = "false" ]; then
-    echo "  https://${IOCAGE_HOST_ADDRESS}"
+    echo "  https://${IOCAGE_JAIL_IP}"
     echo ""
     echo "NOTE: This installation uses self-signed certificates."
     echo "You can install the root certificate from:"
     echo "  /usr/local/etc/letsencrypt/live/truenas/root.cer"
 else
-    echo "  http://${IOCAGE_HOST_ADDRESS}"
+    echo "  http://${IOCAGE_JAIL_IP}"
 fi
 echo ""
 echo "Admin credentials stored in: /root/PLUGIN_INFO"
