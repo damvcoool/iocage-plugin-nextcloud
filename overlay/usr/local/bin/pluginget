@@ -5,4 +5,6 @@ case $1 in
 	dbname) cat /root/dbname ;;
 	dbuser) cat /root/dbuser ;;
 	dbpassword) cat /root/dbpassword ;;
+	ncuser) cat /root/ncuser ;;
+	ncpassword) cat /root/ncpassword ;;
 esac

@@ -23,7 +23,7 @@ then
 fi
 
 # Generating TLS certificate.
-envsubst "\${IOCAGE_HOST_ADDRESS}" < "/root/tls/server_cert.conf.template" > "/root/tls/server_cert.conf"
+envsubst "\${IOCAGE_JAIL_IP}" < "/root/tls/server_cert.conf.template" > "/root/tls/server_cert.conf"
 openssl req \
 	-nodes \
 	-new \
