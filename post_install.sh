@@ -5,15 +5,15 @@ set -xeu
 # Load environment variable from /etc/iocage-env
 . load_env
 
-# Generate some configuration from templates.
-sync_configuration
-
-# Generate self-signed TLS certificates
+# Generate self-signed TLS certificates BEFORE sync_configuration
 # Note: By default, HTTPS is enabled (ALLOW_INSECURE_ACCESS defaults to false in newer setup)
 if [ "${ALLOW_INSECURE_ACCESS:-false}" = "false" ]
 then
 	generate_self_signed_tls_certificates
 fi
+
+# Generate some configuration from templates.
+sync_configuration
 
 # Enable the necessary services
 sysrc -f /etc/rc.conf nginx_enable="YES"
