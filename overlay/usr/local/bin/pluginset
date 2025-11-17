@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# All plugin settings are read-only, so this script doesn't need to do anything
+# It exists to satisfy the settings.json serviceset requirement
+exit 0
