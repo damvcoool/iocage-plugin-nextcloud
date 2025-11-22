@@ -142,8 +142,6 @@ location ~ \.(?:css|js|mjs|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
     add_header X-Robots-Tag                      "noindex, nofollow" always;
     add_header X-XSS-Protection                  "1; mode=block"     always;
     access_log off;     # Optional: Don't log access to assets
-    # Performance: Use tcp_nopush for static content to buffer packets before sending
-    tcp_nopush on;
 	location ~ \.wasm$ {
 		default_type application/wasm;
     }
