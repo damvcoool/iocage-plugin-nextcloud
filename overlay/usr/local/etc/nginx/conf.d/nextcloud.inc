@@ -6,7 +6,16 @@ server_tokens off;
 
 # set max upload size
 client_max_body_size 512M;
-fastcgi_buffers 64 4K;
+# Performance: Increased fastcgi buffers for better throughput
+fastcgi_buffers 128 4K;
+# Performance: Add fastcgi buffer size configuration
+fastcgi_buffer_size 8k;
+fastcgi_busy_buffers_size 16k;
+
+# Performance: FastCGI connect and timeout settings
+fastcgi_connect_timeout 60s;
+fastcgi_send_timeout 180s;
+fastcgi_read_timeout 180s;
 
 # Enable gzip but do not remove ETag headers
 gzip on;
@@ -23,7 +32,8 @@ gzip_types application/atom+xml application/javascript application/json applicat
 # The settings allows you to optimize the HTTP2 bandwitdth.
 # See https://blog.cloudflare.com/delivering-http-2-upload-speed-improvements/
 # for tunning hints
-client_body_buffer_size 512k;
+# Performance: Increased client body buffer for better HTTP2 performance
+client_body_buffer_size 1m;
 
 # HTTP response headers borrowed from Nextcloud `.htaccess`
 add_header Referrer-Policy                      "no-referrer"   always;
@@ -123,7 +133,8 @@ location ~ \.php(?:$|/) {
 
 location ~ \.(?:css|js|mjs|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
     try_files $uri /index.php$request_uri;
-    add_header Cache-Control "public, max-age=15778463, $asset_immutable";
+    # Performance: Extended cache time from ~6 months to 1 year for immutable assets
+    add_header Cache-Control "public, max-age=31536000, immutable";
 	add_header Referrer-Policy                   "no-referrer"       always;
     add_header X-Content-Type-Options            "nosniff"           always;
     add_header X-Frame-Options                   "SAMEORIGIN"        always;
@@ -131,6 +142,9 @@ location ~ \.(?:css|js|mjs|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
     add_header X-Robots-Tag                      "noindex, nofollow" always;
     add_header X-XSS-Protection                  "1; mode=block"     always;
     access_log off;     # Optional: Don't log access to assets
+    # Performance: Optimize TCP settings for static content
+    tcp_nopush on;
+    tcp_nodelay on;
 	location ~ \.wasm$ {
 		default_type application/wasm;
     }
@@ -138,7 +152,9 @@ location ~ \.(?:css|js|mjs|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
 
 location ~ \.woff2?$ {
     try_files $uri /index.php$request_uri;
-    expires 7d;         # Cache-Control policy borrowed from `.htaccess`
+    # Performance: Increased cache from 7d to 90d for font files
+    expires 90d;
+    add_header Cache-Control "public, immutable";
     access_log off;     # Optional: Don't log access to assets
 }
 
