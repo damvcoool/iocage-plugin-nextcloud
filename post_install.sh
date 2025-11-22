@@ -24,6 +24,16 @@ sysrc -f /etc/rc.conf fail2ban_enable="YES"
 
 chmod 777 /tmp
 
+# Create cache directories for performance optimizations
+echo "Creating cache directories..."
+mkdir -p /var/cache/opcache
+chown www:www /var/cache/opcache
+chmod 755 /var/cache/opcache
+
+mkdir -p /var/tmp/nginx/fastcgi_cache
+chown www:www /var/tmp/nginx/fastcgi_cache
+chmod 755 /var/tmp/nginx/fastcgi_cache
+
 # Start the services with better error handling
 echo "Starting PHP-FPM..."
 service php_fpm start 2>/dev/null || echo "Warning: PHP-FPM failed to start"

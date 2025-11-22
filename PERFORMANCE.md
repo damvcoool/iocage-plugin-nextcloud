@@ -13,7 +13,7 @@ All configuration files have been optimized with performance in mind. Below is a
 - Increased interned strings buffer from 64MB to 128MB for more string caching
 - Increased max accelerated files from 10,000 to 100,000 for larger projects
 - Increased JIT buffer from 128MB to 256MB for better JIT performance
-- Added file cache for persistent OPcache across restarts
+- Added file cache at `/var/cache/opcache` for persistent OPcache across restarts
 - Enabled fast shutdown for improved performance
 
 **APCu Enhancements:**
@@ -45,7 +45,7 @@ All configuration files have been optimized with performance in mind. Below is a
 A comprehensive Redis configuration has been added with the following optimizations:
 
 **Memory Management:**
-- Set maxmemory to 512MB (adjustable based on system resources)
+- Set maxmemory to 512MB (adjustable based on system resources: 512-800MB for 8GB systems, 1-1.5GB for 16GB systems)
 - Configured allkeys-lru eviction policy for optimal cache management
 - Optimized data structure settings for memory efficiency
 
@@ -76,10 +76,11 @@ A comprehensive Redis configuration has been added with the following optimizati
 - Added server_names_hash_bucket_size for better hostname handling
 
 **FastCGI Caching:**
-- Added comprehensive FastCGI cache configuration
+- Added comprehensive FastCGI cache configuration at `/var/tmp/nginx/fastcgi_cache`
 - Set cache path with 256MB zone and 1GB max size
 - Enabled background updates and cache locking
 - Configured intelligent cache invalidation
+- Cache directories are automatically created during installation
 
 **File Caching:**
 - Added open_file_cache (10,000 files, 30s inactive)
@@ -217,14 +218,19 @@ While these optimizations focus on performance, they maintain security best prac
 
 After applying these optimizations:
 
-1. **Clear all caches:**
+1. **Cache directories are automatically created:**
+   The installation script (`post_install.sh`) creates the following directories:
+   - `/var/cache/opcache` for PHP OPcache file cache
+   - `/var/tmp/nginx/fastcgi_cache` for Nginx FastCGI cache
+
+2. **Clear all caches:**
    ```bash
    service redis restart
    service php-fpm restart
    service nginx restart
    ```
 
-2. **Test Nextcloud performance:**
+3. **Test Nextcloud performance:**
    - Use the Nextcloud admin panel to run a system check
    - Test file upload/download speeds
    - Monitor response times for various operations
