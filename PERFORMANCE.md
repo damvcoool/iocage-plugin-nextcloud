@@ -78,8 +78,8 @@ A comprehensive Redis configuration has been added with the following optimizati
 **FastCGI Caching:**
 - Added comprehensive FastCGI cache configuration at `/var/tmp/nginx/fastcgi_cache`
 - Set cache path with 256MB zone and 1GB max size
-- Enabled background updates and cache locking
-- Configured intelligent cache invalidation
+- Cache zone is configured but not enabled by default to avoid session management issues
+- Can be enabled with appropriate cache bypass rules for dynamic content
 - Cache directories are automatically created during installation
 
 **File Caching:**
@@ -120,7 +120,7 @@ A comprehensive Redis configuration has been added with the following optimizati
 - Increased max_connections from default to 300
 - Set max_connect_errors to 100,000
 - Added thread_cache_size (50) for connection reuse
-- Disabled query_cache (MySQL 8.0+ best practice)
+- Query cache removed (MySQL 8.0+ default behavior)
 
 **Table and File Handling:**
 - Increased open_files_limit from 32,768 to 65,535
@@ -197,6 +197,17 @@ save ""
 appendonly no
 ```
 
+**For Advanced FastCGI Caching:**
+To enable FastCGI caching for static Nextcloud pages (use with caution):
+1. Add to the PHP location block in your Nextcloud virtual host:
+   ```
+   fastcgi_cache NEXTCLOUD;
+   fastcgi_cache_valid 200 60m;
+   fastcgi_cache_bypass $skip_cache;
+   fastcgi_no_cache $skip_cache;
+   ```
+2. Configure cache bypass for dynamic content (login, API calls, etc.)
+
 **For HTTP/2 Optimization:**
 Ensure HTTP/2 is enabled in your Nextcloud Nginx virtual host configuration.
 
@@ -209,10 +220,11 @@ If you need to upload files larger than 512MB:
 ### 5. Security Considerations
 
 While these optimizations focus on performance, they maintain security best practices:
-- Redis is bound to localhost only
+- Redis is bound to localhost only with protected mode enabled
 - All services use appropriate permissions
 - Slow query logging helps identify potential SQL injection attempts
-- Protected mode is disabled for Redis as it's localhost-only
+- FastCGI caching is disabled by default to avoid session management issues
+- Cache directories are created with appropriate ownership and permissions
 
 ## Testing Performance
 
