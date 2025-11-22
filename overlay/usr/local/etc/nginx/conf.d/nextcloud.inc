@@ -133,7 +133,7 @@ location ~ \.php(?:$|/) {
 
 location ~ \.(?:css|js|mjs|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
     try_files $uri /index.php$request_uri;
-    # Performance: Extended cache time from ~6 months to 1 year for immutable assets
+    # Performance: Extended cache time to 1 year (31536000 seconds) for immutable assets
     add_header Cache-Control "public, max-age=31536000, immutable";
 	add_header Referrer-Policy                   "no-referrer"       always;
     add_header X-Content-Type-Options            "nosniff"           always;
