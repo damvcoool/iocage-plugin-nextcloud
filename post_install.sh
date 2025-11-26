@@ -17,19 +17,23 @@ sync_configuration
 
 # Enable the necessary services
 sysrc -f /etc/rc.conf nginx_enable="YES"
-sysrc -f /etc/rc.conf mysql_enable="YES"
+sysrc -f /etc/rc.conf postgresql_enable="YES"
 sysrc -f /etc/rc.conf php_fpm_enable="YES"
 sysrc -f /etc/rc.conf redis_enable="YES"
 sysrc -f /etc/rc.conf fail2ban_enable="YES"
 
 chmod 777 /tmp
 
+# Initialize PostgreSQL
+echo "Initializing PostgreSQL..."
+/usr/local/etc/rc.d/postgresql oneinitdb
+
 # Start the services with better error handling
 echo "Starting PHP-FPM..."
 service php_fpm start 2>/dev/null || echo "Warning: PHP-FPM failed to start"
 
-echo "Starting MySQL..."
-service mysql-server start 2>/dev/null || echo "Warning: MySQL failed to start"
+echo "Starting PostgreSQL..."
+service postgresql start 2>/dev/null || echo "Warning: PostgreSQL failed to start"
 
 echo "Starting Redis..."
 service redis start 2>/dev/null || echo "Warning: Redis failed to start"
@@ -49,32 +53,27 @@ openssl rand --hex 8 > /root/ncpassword
 PASS=$(cat /root/dbpassword)
 NCPASS=$(cat /root/ncpassword)
 
-# Wait for MySQL to be ready
-echo "Waiting for MySQL to be ready..."
+# Wait for PostgreSQL to be ready
+echo "Waiting for PostgreSQL to be ready..."
 max_attempts=30
 attempt=0
-until mysqladmin ping --silent 2>/dev/null || [ $attempt -eq $max_attempts ]
+until su -m postgres -c "psql -c 'SELECT 1' >/dev/null 2>&1" || [ $attempt -eq $max_attempts ]
 do
     attempt=$((attempt + 1))
-    echo "MySQL is unavailable - attempt $attempt of $max_attempts"
+    echo "PostgreSQL is unavailable - attempt $attempt of $max_attempts"
     sleep 2
 done
 
 if [ $attempt -eq $max_attempts ]; then
-    echo "ERROR: MySQL failed to start after $max_attempts attempts"
+    echo "ERROR: PostgreSQL failed to start after $max_attempts attempts"
     exit 1
 fi
 
-# Configure mysql
-echo "Configuring MySQL..."
-mysqladmin -u root password "${PASS}"
-mysql -u root -p"${PASS}" --connect-expired-password <<-EOF
-ALTER USER 'root'@'localhost' IDENTIFIED WITH caching_sha2_password BY '${PASS}';
-CREATE USER '${USER}'@'localhost' IDENTIFIED WITH caching_sha2_password BY '${PASS}';
-GRANT ALL PRIVILEGES ON *.* TO '${USER}'@'localhost' WITH GRANT OPTION;
-GRANT ALL PRIVILEGES ON ${DB}.* TO '${USER}'@'localhost';
-FLUSH PRIVILEGES;
-EOF
+# Configure PostgreSQL
+echo "Configuring PostgreSQL..."
+su -m postgres -c "psql -c \"CREATE USER ${USER} WITH PASSWORD '${PASS}';\""
+su -m postgres -c "psql -c \"CREATE DATABASE ${DB} OWNER ${USER} ENCODING 'UTF8' TEMPLATE template0;\""
+su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE ${DB} TO ${USER};\""
 
 # Make the default log directory
 mkdir -p /var/log/zm
@@ -88,7 +87,7 @@ chown www:www $NCDATA_DIR
 # Use occ to complete Nextcloud installation
 echo "Installing Nextcloud..."
 su -m www -c "php /usr/local/www/nextcloud/occ maintenance:install \
-  --database=\"mysql\" \
+  --database=\"pgsql\" \
   --database-name=\"nextcloud\" \
   --database-user=\"$USER\" \
   --database-pass=\"$PASS\" \
@@ -99,6 +98,13 @@ su -m www -c "php /usr/local/www/nextcloud/occ maintenance:install \
 
 echo "Configuring Nextcloud background jobs..."
 su -m www -c "php /usr/local/www/nextcloud/occ background:cron"
+
+echo "Configuring Redis cache..."
+su -m www -c "php /usr/local/www/nextcloud/occ config:system:set redis host --value=localhost"
+su -m www -c "php /usr/local/www/nextcloud/occ config:system:set redis port --value=6379 --type=integer"
+su -m www -c "php /usr/local/www/nextcloud/occ config:system:set memcache.local --value='\\OC\\Memcache\\APCu'"
+su -m www -c "php /usr/local/www/nextcloud/occ config:system:set memcache.distributed --value='\\OC\\Memcache\\Redis'"
+su -m www -c "php /usr/local/www/nextcloud/occ config:system:set memcache.locking --value='\\OC\\Memcache\\Redis'"
 
 echo "Adding missing database indices..."
 su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-indices"
