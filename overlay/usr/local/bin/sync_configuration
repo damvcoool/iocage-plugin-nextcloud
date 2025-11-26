@@ -1,6 +1,6 @@
 #!/bin/sh
 
-set -xeu
+set -eu
 
 . load_env
 
