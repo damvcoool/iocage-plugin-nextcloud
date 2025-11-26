@@ -124,6 +124,27 @@ Then add your domain to Nextcloud known hosts in: `/usr/local/www/nextcloud/conf
 
 When you update the Nextcloud plugin, you should be careful to not skip any major version and to alway update to the last minor version before that.
 
+### Update Process
+
+The plugin uses iocage's `pre_update.sh` and `post_update.sh` hooks for a smooth update process:
+
+1. **pre_update.sh** (runs before packages are updated):
+   - Puts Nextcloud in maintenance mode
+   - Backs up the database (MySQL or PostgreSQL)
+   - Backs up Nextcloud configuration
+   - Backs up SSL certificates
+   - Saves migration state
+
+2. **post_update.sh** (runs after packages are updated):
+   - Runs database migrations
+   - Syncs configuration files
+   - Restarts all services
+   - Runs Nextcloud upgrade
+   - Adds missing database indices
+   - Disables maintenance mode
+
+All backups are stored in `/root/pre_update_backup_<timestamp>/` for recovery if needed.
+
 ## Scripts
 
 - `generate_self_signed_certificates`:
