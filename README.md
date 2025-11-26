@@ -1,4 +1,55 @@
-## HOW-TO Install this fork
+# iocage-plugin-nextcloud
+
+Artifact file(s) for Nextcloud iocage plugin
+
+## Important: PostgreSQL Migration
+
+**Version 2.0+ uses PostgreSQL 18** instead of MySQL. 
+
+### For Existing Installations
+
+If you're upgrading from a MySQL-based installation, you'll need to manually migrate your data:
+
+1. **Before upgrading**, backup your jail using TrueNAS snapshots
+2. **After upgrade**, the system will detect MySQL and display migration instructions
+3. **Run the migration tool**:
+   ```bash
+   iocage console <nextcloud_jail_name>
+   /root/migrate_mysql_to_postgresql.sh
+   ```
+4. **Follow the on-screen instructions** to complete the migration using `pgloader`
+
+### For New Installations
+
+New installations will automatically use PostgreSQL 18 - no migration needed.
+
+### Migration Details
+
+The migration process:
+- Creates a complete MySQL backup in `/root/mysql_backup_<timestamp>/`
+- Backs up your Nextcloud configuration
+- Initializes PostgreSQL 18 with optimized settings
+- Preserves SSL certificates and all Nextcloud settings
+- Maintains jail mountpoints and data directory
+- Requires `pgloader` for data conversion (not included - install separately)
+
+**Important**: The migration tool requires `pgloader` to convert MySQL data to PostgreSQL format. Install it with:
+```bash
+pkg install pgloader
+```
+
+## Performance Optimizations
+
+This version includes optimized configurations for:
+
+- **PostgreSQL 18**: Tuned for 4-8GB RAM with autovacuum, JIT compilation, and proper connection pooling
+- **Nginx**: Increased worker connections, file caching, and buffer sizes for better throughput
+- **PHP-FPM**: Optimized process management with OPcache JIT enabled for PHP 8.4
+- **Redis**: Configured as LRU cache with 512MB memory limit for session and file locking
+
+These optimizations support 10-50 concurrent users on typical TrueNAS hardware.
+
+## Installation
 
 ```shell
 BRANCH=master
@@ -7,10 +58,6 @@ JSON=/tmp/nextcloud.json
 fetch -o "$JSON" "https://raw.githubusercontent.com/damvcoool/iocage-plugin-index/${BRANCH}/nextcloud.json"
 iocage fetch -P "$JSON" --branch "$BRANCH" -n Nextcloud
 ```
-
-# iocage-plugin-nextcloud
-
-Artifact file(s) for Nextcloud iocage plugin
 
 ## New HTTPS requirement
 
@@ -65,14 +112,38 @@ Then add your domain to Nextcloud known hosts in: `/usr/local/www/nextcloud/conf
 
 ## Technical details
 
-- Fail2ban is configured to ban users for 24h after 3 wrong connection attempt in a 12h time frame.
-- Cron job are executed by the system.
-- Nextcloud make use of Redis and APCu for caching.
-- Database migrations needs to be regularly run after version updates. You can use the `run_db_migrations` command to run them.
+- PostgreSQL 18 is used as the database backend with optimized configuration
+- Redis is used for distributed caching, file locking, and session storage
+- Fail2ban is configured to ban users for 24h after 3 wrong connection attempt in a 12h time frame
+- Cron jobs are executed by the system
+- Nextcloud uses Redis and APCu for caching (Redis for distributed/locking, APCu for local)
+- PHP 8.4 with OPcache JIT enabled for better performance
+- Database migrations need to be regularly run after version updates. You can use the `run_db_migrations` command to run them
 
 ## Updates
 
 When you update the Nextcloud plugin, you should be careful to not skip any major version and to alway update to the last minor version before that.
+
+### Update Process
+
+The plugin uses iocage's `pre_update.sh` and `post_update.sh` hooks for a smooth update process:
+
+1. **pre_update.sh** (runs before packages are updated):
+   - Puts Nextcloud in maintenance mode
+   - Backs up the database (MySQL or PostgreSQL)
+   - Backs up Nextcloud configuration
+   - Backs up SSL certificates
+   - Saves migration state
+
+2. **post_update.sh** (runs after packages are updated):
+   - Runs database migrations
+   - Syncs configuration files
+   - Restarts all services
+   - Runs Nextcloud upgrade
+   - Adds missing database indices
+   - Disables maintenance mode
+
+All backups are stored in `/root/pre_update_backup_<timestamp>/` for recovery if needed.
 
 ## Scripts
 

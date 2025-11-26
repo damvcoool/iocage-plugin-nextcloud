@@ -7,6 +7,16 @@ set -xeu
 NGINX_CONFD_PATH=/usr/local/etc/nginx/conf.d
 OCPS_CONF="${NGINX_CONFD_PATH}/ocps-stapling.conf"
 
+# Copy PostgreSQL configuration if it exists
+if [ -f /root/config/postgresql.conf ]; then
+    cp /root/config/postgresql.conf /usr/local/etc/postgresql/data18/postgresql.conf 2>/dev/null || true
+fi
+
+# Copy Redis configuration if it exists and service is enabled
+if [ -f /root/config/redis.conf ]; then
+    cp /root/config/redis.conf /usr/local/etc/redis.conf 2>/dev/null || true
+fi
+
 # Two cases:
 # - Nextcloud is accessed through <domain_name>: use port 443
 # - Nextcloud is accessed through <ip>:<port>: use port $IOCAGE_HOST_PORT_HTTPS
