@@ -6,9 +6,10 @@ CERT_PATH=/usr/local/etc/letsencrypt/live/truenas
 
 # Check if we have Let's Encrypt certificates by examining the certificate issuer
 # This avoids calling certbot which logs debug messages on every invocation
+# Match various Let's Encrypt certificate authorities (R3, E1, etc.) and ISRG Root
 has_letsencrypt_cert() {
 	[ -f "${CERT_PATH}/fullchain.pem" ] && \
-		openssl x509 -in "${CERT_PATH}/fullchain.pem" -issuer -noout 2>/dev/null | grep -qi "Let's Encrypt"
+		openssl x509 -in "${CERT_PATH}/fullchain.pem" -issuer -noout 2>/dev/null | grep -qiE "Let's Encrypt|ISRG Root"
 }
 
 if has_letsencrypt_cert; then
