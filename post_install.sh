@@ -84,6 +84,8 @@ chmod 777 /tmp
 
 # Initialize PostgreSQL
 echo "Initializing PostgreSQL..."
+# Set authentication options to suppress initdb warning about "trust" authentication
+sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
 /usr/local/etc/rc.d/postgresql oneinitdb
 
 # Start the services with better error handling
