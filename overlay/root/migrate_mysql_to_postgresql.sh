@@ -96,6 +96,8 @@ service mysql-server stop 2>/dev/null || true
 echo ""
 echo "Initializing PostgreSQL..."
 if [ ! -d /var/db/postgres/data18 ]; then
+    # Set authentication options to suppress initdb warning about "trust" authentication
+    sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
     /usr/local/etc/rc.d/postgresql oneinitdb
 else
     echo "PostgreSQL already initialized"
