@@ -46,14 +46,73 @@ else
     echo "Warning: No Nextcloud config directory found (fresh install?)"
 fi
 
-# Backup SSL certificates
+# Backup SSL certificates and detect SSL configuration state
 echo ""
-echo "Backing up SSL certificates..."
+echo "Backing up SSL certificates and detecting SSL state..."
+
+CERT_PATH=/usr/local/etc/letsencrypt/live/truenas
+SSL_STATE="none"
+
+# Check if we have Let's Encrypt certificates by examining the certificate issuer
+# Match various Let's Encrypt certificate authorities (R3, E1, etc.) and ISRG Root
+has_letsencrypt_cert() {
+    [ -f "${CERT_PATH}/fullchain.pem" ] && \
+        openssl x509 -in "${CERT_PATH}/fullchain.pem" -issuer -noout 2>/dev/null | grep -qiE "Let's Encrypt|ISRG Root"
+}
+
+# Check if we have self-signed certificates (check for root.cer which is only created for self-signed)
+has_self_signed_cert() {
+    [ -f "${CERT_PATH}/root.cer" ] && [ -f "${CERT_PATH}/fullchain.pem" ]
+}
+
+# Check if nginx is configured for HTTPS by looking at the active configuration
+nginx_has_ssl() {
+    [ -f /usr/local/etc/nginx/conf.d/nextcloud.https.conf ]
+}
+
+# Determine the SSL state
+if has_letsencrypt_cert; then
+    SSL_STATE="letsencrypt"
+    echo "Detected Let's Encrypt certificates"
+elif has_self_signed_cert; then
+    SSL_STATE="self-signed"
+    echo "Detected self-signed certificates"
+elif nginx_has_ssl; then
+    SSL_STATE="custom-ssl"
+    echo "Detected custom SSL configuration"
+else
+    SSL_STATE="none"
+    echo "No SSL configuration detected (HTTP only)"
+fi
+
+# Check Nextcloud config for SSL requirement (overwrite.cli.url)
+NC_URL_SCHEME="http"
+if [ -f /usr/local/www/nextcloud/config/config.php ]; then
+    if grep -q "'overwrite.cli.url' => 'https://" /usr/local/www/nextcloud/config/config.php 2>/dev/null; then
+        NC_URL_SCHEME="https"
+        echo "Nextcloud is configured to use HTTPS (overwrite.cli.url)"
+    elif grep -q "'overwrite.cli.url' => 'http://" /usr/local/www/nextcloud/config/config.php 2>/dev/null; then
+        NC_URL_SCHEME="http"
+        echo "Nextcloud is configured to use HTTP (overwrite.cli.url)"
+    fi
+fi
+
+# Save SSL state for post_update to use
+echo "$SSL_STATE" > "$BACKUP_DIR/ssl_state.txt"
+echo "$NC_URL_SCHEME" > "$BACKUP_DIR/nc_url_scheme.txt"
+
+# Backup SSL certificates
 if [ -d /usr/local/etc/letsencrypt ]; then
     cp -r /usr/local/etc/letsencrypt "$BACKUP_DIR/letsencrypt"
     echo "SSL certificates backed up to: $BACKUP_DIR/letsencrypt"
 else
     echo "No SSL certificates found"
+fi
+
+# Save ALLOW_INSECURE_ACCESS state if it was explicitly set
+if [ -f /root/jail_options.env ] && grep -q "ALLOW_INSECURE_ACCESS" /root/jail_options.env; then
+    cp /root/jail_options.env "$BACKUP_DIR/jail_options.env"
+    echo "jail_options.env backed up"
 fi
 
 # Check which database is running and back it up

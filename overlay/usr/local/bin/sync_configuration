@@ -6,6 +6,7 @@ set -eu
 
 NGINX_CONFD_PATH=/usr/local/etc/nginx/conf.d
 OCPS_CONF="${NGINX_CONFD_PATH}/ocps-stapling.conf"
+CERT_PATH=/usr/local/etc/letsencrypt/live/truenas
 
 # Copy PostgreSQL configuration if it exists
 if [ -f /root/config/postgresql.conf ]; then
@@ -21,13 +22,24 @@ fi
 # - Nextcloud is accessed through <domain_name>: use port 443
 # - Nextcloud is accessed through <ip>:<port>: use port $IOCAGE_HOST_PORT_HTTPS
 export NEXTCLOUD_HTTPS_PORT=443
-if certbot certificates | grep "No certificates found."; then
+
+# Check if we have Let's Encrypt certificates by examining the certificate issuer
+# This avoids calling certbot which logs debug messages on every invocation
+# Match various Let's Encrypt certificate authorities (R3, E1, etc.) and ISRG Root
+has_letsencrypt_cert() {
+    [ -f "${CERT_PATH}/fullchain.pem" ] && \
+        openssl x509 -in "${CERT_PATH}/fullchain.pem" -issuer -noout 2>/dev/null | grep -qiE "Let's Encrypt|ISRG Root"
+}
+
+if has_letsencrypt_cert; then
+    # using letsencrypt so enable OCSP stapling
+    if [ ! -e "$OCPS_CONF" ]; then
+        ln -s "${OCPS_CONF}.template" "$OCPS_CONF"
+    fi
+else
     NEXTCLOUD_HTTPS_PORT=$IOCAGE_HOST_PORT_HTTPS
     # disable OCPS stapling
     rm -f "$OCPS_CONF"
-else
-    # using letsencrypt so enable OCSP stapling
-    ln -s "${OCPS_CONF}.template" "$OCPS_CONF"
 fi
 
 # Generate nginx configuration from the base template
