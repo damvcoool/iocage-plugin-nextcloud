@@ -115,51 +115,149 @@ if [ -f /root/jail_options.env ] && grep -q "ALLOW_INSECURE_ACCESS" /root/jail_o
     echo "jail_options.env backed up"
 fi
 
-# Check which database is running and back it up
+# Detect database type using multiple methods for reliability
 echo ""
 echo "Detecting and backing up database..."
 
-if service postgresql status >/dev/null 2>&1; then
-    # PostgreSQL is running
-    echo "PostgreSQL detected, creating backup..."
-    if [ -n "$DB_PASS" ]; then
-        PGPASSWORD="$DB_PASS" pg_dump -U "$DB_USER" -h localhost "$DB_NAME" > "$BACKUP_DIR/nextcloud_pg.sql" 2>/dev/null || true
-        if [ -s "$BACKUP_DIR/nextcloud_pg.sql" ]; then
-            BACKUP_SIZE=$(du -h "$BACKUP_DIR/nextcloud_pg.sql" | cut -f1)
-            echo "PostgreSQL backup completed: $BACKUP_DIR/nextcloud_pg.sql ($BACKUP_SIZE)"
-        else
-            echo "Warning: PostgreSQL backup may have failed or database is empty"
-        fi
-    else
-        echo "Warning: No database password found, skipping database backup"
+# Function to detect database type from Nextcloud config
+detect_db_from_nextcloud_config() {
+    if [ -f /usr/local/www/nextcloud/config/config.php ]; then
+        # Extract dbtype from config.php (handle both single and double quotes)
+        NC_DBTYPE=$(grep "dbtype" /usr/local/www/nextcloud/config/config.php 2>/dev/null | sed "s/.*=> *[\"']\([^\"']*\)[\"'].*/\1/" | head -1)
+        case "$NC_DBTYPE" in
+            pgsql)
+                echo "$DB_TYPE_POSTGRESQL"
+                return 0
+                ;;
+            mysql)
+                echo "$DB_TYPE_MYSQL"
+                return 0
+                ;;
+        esac
     fi
-    echo "$DB_TYPE_POSTGRESQL" > "$BACKUP_DIR/database_type.txt"
-    
-elif service mysql-server status >/dev/null 2>&1; then
-    # MySQL is running - use MYSQL_PWD environment variable for security
-    echo "MySQL detected, creating backup..."
-    if [ -n "$DB_PASS" ]; then
-        MYSQL_PWD="$DB_PASS" mysqldump -u "$DB_USER" \
-            --single-transaction \
-            --routines \
-            --triggers \
-            --hex-blob \
-            "$DB_NAME" > "$BACKUP_DIR/nextcloud_mysql.sql" 2>/dev/null || true
-        if [ -s "$BACKUP_DIR/nextcloud_mysql.sql" ]; then
-            BACKUP_SIZE=$(du -h "$BACKUP_DIR/nextcloud_mysql.sql" | cut -f1)
-            echo "MySQL backup completed: $BACKUP_DIR/nextcloud_mysql.sql ($BACKUP_SIZE)"
-        else
-            echo "Warning: MySQL backup may have failed or database is empty"
+    return 1
+}
+
+# Function to detect database type from rc.conf (enabled services)
+detect_db_from_rcconf() {
+    if [ -f /etc/rc.conf ]; then
+        if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+            echo "$DB_TYPE_POSTGRESQL"
+            return 0
+        elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+            echo "$DB_TYPE_MYSQL"
+            return 0
         fi
-    else
-        echo "Warning: No database password found, skipping database backup"
     fi
-    echo "$DB_TYPE_MYSQL" > "$BACKUP_DIR/database_type.txt"
-    
-else
-    echo "No database running (fresh install?)"
-    echo "$DB_TYPE_NONE" > "$BACKUP_DIR/database_type.txt"
+    return 1
+}
+
+# Function to detect database type from running services
+detect_db_from_running_services() {
+    if service postgresql status >/dev/null 2>&1; then
+        echo "$DB_TYPE_POSTGRESQL"
+        return 0
+    elif service mysql-server status >/dev/null 2>&1; then
+        echo "$DB_TYPE_MYSQL"
+        return 0
+    fi
+    return 1
+}
+
+# Try detection methods in order of reliability
+DETECTED_DB_TYPE=""
+
+# Method 1: Check Nextcloud configuration (most reliable)
+if DETECTED_DB_TYPE=$(detect_db_from_nextcloud_config); then
+    echo "Database type detected from Nextcloud config: $DETECTED_DB_TYPE"
 fi
+
+# Method 2: Check rc.conf for enabled services
+if [ -z "$DETECTED_DB_TYPE" ]; then
+    if DETECTED_DB_TYPE=$(detect_db_from_rcconf); then
+        echo "Database type detected from rc.conf: $DETECTED_DB_TYPE"
+    fi
+fi
+
+# Method 3: Check running services
+if [ -z "$DETECTED_DB_TYPE" ]; then
+    if DETECTED_DB_TYPE=$(detect_db_from_running_services); then
+        echo "Database type detected from running services: $DETECTED_DB_TYPE"
+    fi
+fi
+
+# Default to none if no database detected
+if [ -z "$DETECTED_DB_TYPE" ]; then
+    DETECTED_DB_TYPE="$DB_TYPE_NONE"
+    echo "No database detected (fresh install?)"
+fi
+
+# Perform backup based on detected database type
+case "$DETECTED_DB_TYPE" in
+    "$DB_TYPE_POSTGRESQL")
+        echo "PostgreSQL detected, creating backup..."
+        # Start PostgreSQL if not running (needed for backup)
+        if ! service postgresql status >/dev/null 2>&1; then
+            echo "Starting PostgreSQL for backup..."
+            service postgresql start 2>/dev/null || true
+            # Wait for PostgreSQL to be ready
+            max_wait=30
+            waited=0
+            while ! service postgresql status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+        fi
+        if [ -n "$DB_PASS" ]; then
+            PGPASSWORD="$DB_PASS" pg_dump -U "$DB_USER" -h localhost "$DB_NAME" > "$BACKUP_DIR/nextcloud_pg.sql" 2>/dev/null || true
+            if [ -s "$BACKUP_DIR/nextcloud_pg.sql" ]; then
+                BACKUP_SIZE=$(du -h "$BACKUP_DIR/nextcloud_pg.sql" | cut -f1)
+                echo "PostgreSQL backup completed: $BACKUP_DIR/nextcloud_pg.sql ($BACKUP_SIZE)"
+            else
+                echo "Warning: PostgreSQL backup may have failed or database is empty"
+            fi
+        else
+            echo "Warning: No database password found, skipping database backup"
+        fi
+        ;;
+    "$DB_TYPE_MYSQL")
+        echo "MySQL detected, creating backup..."
+        # Start MySQL if not running (needed for backup)
+        if ! service mysql-server status >/dev/null 2>&1; then
+            echo "Starting MySQL for backup..."
+            service mysql-server start 2>/dev/null || true
+            # Wait for MySQL to be ready
+            max_wait=30
+            waited=0
+            while ! service mysql-server status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+        fi
+        if [ -n "$DB_PASS" ]; then
+            MYSQL_PWD="$DB_PASS" mysqldump -u "$DB_USER" \
+                --single-transaction \
+                --routines \
+                --triggers \
+                --hex-blob \
+                "$DB_NAME" > "$BACKUP_DIR/nextcloud_mysql.sql" 2>/dev/null || true
+            if [ -s "$BACKUP_DIR/nextcloud_mysql.sql" ]; then
+                BACKUP_SIZE=$(du -h "$BACKUP_DIR/nextcloud_mysql.sql" | cut -f1)
+                echo "MySQL backup completed: $BACKUP_DIR/nextcloud_mysql.sql ($BACKUP_SIZE)"
+            else
+                echo "Warning: MySQL backup may have failed or database is empty"
+            fi
+        else
+            echo "Warning: No database password found, skipping database backup"
+        fi
+        ;;
+    *)
+        echo "No database to backup"
+        ;;
+esac
+
+echo "$DETECTED_DB_TYPE" > "$BACKUP_DIR/database_type.txt"
+echo "Database type saved: $DETECTED_DB_TYPE"
 
 # Save current migration state
 echo ""

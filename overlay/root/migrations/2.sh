@@ -29,6 +29,8 @@ if ! service mysql-server status >/dev/null 2>&1; then
     echo "Initializing PostgreSQL for new installation..."
     
     # Initialize and start PostgreSQL for fresh installs
+    # Set authentication options to suppress initdb warning about "trust" authentication
+    sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
     /usr/local/etc/rc.d/postgresql oneinitdb
     sysrc -f /etc/rc.conf postgresql_enable="YES"
     service postgresql start
