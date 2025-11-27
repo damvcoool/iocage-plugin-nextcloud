@@ -5,11 +5,69 @@ set -eu
 # Load environment variable from /etc/iocage-env
 . load_env
 
+# Check for pre_update backup to determine SSL configuration
+# This allows post_install to respect the previous SSL state during updates
+PRE_UPDATE_BACKUP=""
+SSL_STATE=""
+if [ -f /root/last_pre_update_backup ]; then
+    PRE_UPDATE_BACKUP=$(cat /root/last_pre_update_backup)
+    if [ -n "$PRE_UPDATE_BACKUP" ] && [ -f "$PRE_UPDATE_BACKUP/ssl_state.txt" ]; then
+        SSL_STATE=$(cat "$PRE_UPDATE_BACKUP/ssl_state.txt")
+        echo "Found pre-update SSL state: $SSL_STATE"
+        
+        # Restore jail_options.env if it existed (preserves ALLOW_INSECURE_ACCESS setting)
+        if [ -f "$PRE_UPDATE_BACKUP/jail_options.env" ]; then
+            cp "$PRE_UPDATE_BACKUP/jail_options.env" /root/jail_options.env
+            # Re-source load_env to pick up restored settings
+            . load_env
+            echo "Restored jail_options.env from pre-update backup"
+        fi
+    fi
+fi
+
+# Determine whether to apply SSL based on pre_update state or ALLOW_INSECURE_ACCESS
+APPLY_SSL="true"
+if [ -n "$SSL_STATE" ]; then
+    # Use pre_update SSL state to determine SSL configuration
+    case "$SSL_STATE" in
+        letsencrypt|self-signed|custom-ssl)
+            APPLY_SSL="true"
+            echo "SSL will be configured (previous state: $SSL_STATE)"
+            ;;
+        none)
+            APPLY_SSL="false"
+            # Set ALLOW_INSECURE_ACCESS=true for HTTP-only configuration
+            if [ ! -f /root/jail_options.env ]; then
+                echo "ALLOW_INSECURE_ACCESS=true" > /root/jail_options.env
+            elif ! grep -q "ALLOW_INSECURE_ACCESS" /root/jail_options.env; then
+                echo "ALLOW_INSECURE_ACCESS=true" >> /root/jail_options.env
+            fi
+            # Re-source to pick up the change
+            . load_env
+            echo "SSL will NOT be configured (previous state: HTTP only)"
+            ;;
+    esac
+elif [ "${ALLOW_INSECURE_ACCESS:-false}" = "true" ]; then
+    APPLY_SSL="false"
+    echo "SSL will NOT be configured (ALLOW_INSECURE_ACCESS=true)"
+fi
+
 # Generate self-signed TLS certificates BEFORE sync_configuration
-# Note: By default, HTTPS is enabled (ALLOW_INSECURE_ACCESS defaults to false in newer setup)
-if [ "${ALLOW_INSECURE_ACCESS:-false}" = "false" ]
-then
-	generate_self_signed_tls_certificates
+# Only if SSL should be applied and certificates don't already exist
+CERT_PATH=/usr/local/etc/letsencrypt/live/truenas
+if [ "$APPLY_SSL" = "true" ]; then
+    # Check if we should restore certificates from pre_update backup
+    if [ -n "$PRE_UPDATE_BACKUP" ] && [ -d "$PRE_UPDATE_BACKUP/letsencrypt" ]; then
+        echo "Restoring SSL certificates from pre-update backup..."
+        mkdir -p /usr/local/etc/letsencrypt
+        cp -a "$PRE_UPDATE_BACKUP/letsencrypt/." /usr/local/etc/letsencrypt/ 2>/dev/null || true
+        echo "SSL certificates restored from: $PRE_UPDATE_BACKUP/letsencrypt"
+    elif [ ! -f "${CERT_PATH}/fullchain.pem" ]; then
+        echo "Generating self-signed TLS certificates..."
+        generate_self_signed_tls_certificates
+    else
+        echo "SSL certificates already exist, keeping them"
+    fi
 fi
 
 # Generate some configuration from templates.
@@ -153,7 +211,7 @@ echo "=========================================="
 echo "Nextcloud installation completed!"
 echo "=========================================="
 echo "You can access Nextcloud at:"
-if [ "${ALLOW_INSECURE_ACCESS:-false}" = "false" ]; then
+if [ "$APPLY_SSL" = "true" ]; then
     echo "  https://${IOCAGE_JAIL_IP}"
     echo ""
     echo "NOTE: This installation uses self-signed certificates."
