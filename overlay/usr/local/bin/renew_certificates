@@ -2,17 +2,26 @@
 
 set -eu
 
-if certbot certificates | grep 'No certificates found'
-then
-	# Limit self-signed certificate renewal to on month before expiration
-	if cat /usr/local/etc/letsencrypt/live/truenas/server.cer | openssl x509 --checkend $((( 60*60*24*31 )))
-	then
-		exit 0
+CERT_PATH=/usr/local/etc/letsencrypt/live/truenas
+
+# Check if we have Let's Encrypt certificates by examining the certificate issuer
+# This avoids calling certbot which logs debug messages on every invocation
+has_letsencrypt_cert() {
+	[ -f "${CERT_PATH}/fullchain.pem" ] && \
+		openssl x509 -in "${CERT_PATH}/fullchain.pem" -issuer -noout 2>/dev/null | grep -qi "Let's Encrypt"
+}
+
+if has_letsencrypt_cert; then
+	certbot renew -q
+else
+	# Limit self-signed certificate renewal to one month before expiration
+	if [ -f "${CERT_PATH}/server.cer" ]; then
+		if openssl x509 -in "${CERT_PATH}/server.cer" -checkend $(( 60*60*24*31 )) >/dev/null 2>&1; then
+			exit 0
+		fi
 	fi
 
 	generate_self_signed_tls_certificates
-else
-	certbot renew -q
 fi
 
 service nginx restart
