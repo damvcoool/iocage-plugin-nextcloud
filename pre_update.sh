@@ -122,6 +122,26 @@ echo "$SSL_STATE" > "$BACKUP_DIR/ssl_state.txt"
 echo "$NC_URL_SCHEME" > "$BACKUP_DIR/nc_url_scheme.txt"
 log_info "SSL state saved: $SSL_STATE, URL scheme: $NC_URL_SCHEME"
 
+# If SSL_STATE is none (HTTP only), ensure ALLOW_INSECURE_ACCESS is set
+# This ensures the HTTP-only configuration is preserved during upgrade
+if [ "$SSL_STATE" = "none" ]; then
+    log_info "HTTP-only configuration detected, ensuring ALLOW_INSECURE_ACCESS=true"
+    if [ ! -f /root/jail_options.env ]; then
+        echo "ALLOW_INSECURE_ACCESS=true" > /root/jail_options.env
+        log_info "Created jail_options.env with ALLOW_INSECURE_ACCESS=true"
+    elif grep -q "ALLOW_INSECURE_ACCESS=true" /root/jail_options.env; then
+        log_info "ALLOW_INSECURE_ACCESS=true already set"
+    elif grep -q "ALLOW_INSECURE_ACCESS" /root/jail_options.env; then
+        # Update existing value (may be set to false)
+        sed -i '' 's/ALLOW_INSECURE_ACCESS=.*/ALLOW_INSECURE_ACCESS=true/' /root/jail_options.env 2>/dev/null || \
+        sed -i 's/ALLOW_INSECURE_ACCESS=.*/ALLOW_INSECURE_ACCESS=true/' /root/jail_options.env
+        log_info "Updated ALLOW_INSECURE_ACCESS to true in jail_options.env"
+    else
+        echo "ALLOW_INSECURE_ACCESS=true" >> /root/jail_options.env
+        log_info "Added ALLOW_INSECURE_ACCESS=true to jail_options.env"
+    fi
+fi
+
 # Backup SSL certificates
 log_step_start "Backing up SSL certificates"
 if [ -d /usr/local/etc/letsencrypt ]; then

@@ -21,11 +21,25 @@ NGINX_CONFD_PATH=/usr/local/etc/nginx/conf.d
 OCPS_CONF="${NGINX_CONFD_PATH}/ocps-stapling.conf"
 CERT_PATH=/usr/local/etc/letsencrypt/live/truenas
 
-# Copy PostgreSQL configuration if it exists
+# Copy PostgreSQL configuration if it exists and data directory is available
 log_info "Checking PostgreSQL configuration..."
 if [ -f /root/config/postgresql.conf ]; then
-    cp /root/config/postgresql.conf /usr/local/etc/postgresql/data18/postgresql.conf 2>/dev/null || true
-    log_info "PostgreSQL configuration copied"
+    # Find the PostgreSQL data directory (supports different PostgreSQL versions)
+    PG_DATA_DIR=""
+    for pg_data_dir in /var/db/postgres/data* ; do
+        # Check if glob expanded to an actual directory (not the literal pattern)
+        if [ -d "$pg_data_dir" ]; then
+            PG_DATA_DIR="$pg_data_dir"
+            break
+        fi
+    done
+    
+    if [ -n "$PG_DATA_DIR" ]; then
+        cp /root/config/postgresql.conf "${PG_DATA_DIR}/postgresql.conf" 2>/dev/null || true
+        log_info "PostgreSQL configuration copied to ${PG_DATA_DIR}"
+    else
+        log_info "PostgreSQL data directory not found (database may not be initialized yet)"
+    fi
 else
     log_info "No custom PostgreSQL configuration found"
 fi
@@ -81,6 +95,15 @@ log_info "Generating nginx configuration for $SCHEME..."
 NEXTCLOUD_CONF="${NGINX_CONFD_PATH}/nextcloud.${SCHEME}.conf"
 envsubst '$NEXTCLOUD_HTTPS_PORT' <"${NEXTCLOUD_CONF}.template" >"$NEXTCLOUD_CONF"
 log_info "Nginx configuration generated: $NEXTCLOUD_CONF"
+
+# Remove the opposite scheme configuration to avoid duplicate upstream errors
+if [ "$SCHEME" = "https" ]; then
+    rm -f "${NGINX_CONFD_PATH}/nextcloud.http.conf"
+    log_info "Removed HTTP configuration to avoid duplicate upstream"
+else
+    rm -f "${NGINX_CONFD_PATH}/nextcloud.https.conf"
+    log_info "Removed HTTPS configuration to avoid duplicate upstream"
+fi
 
 # Copy Nextcloud custom configuration
 log_info "Copying Nextcloud custom configuration..."
