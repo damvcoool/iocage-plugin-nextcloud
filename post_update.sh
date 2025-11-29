@@ -185,7 +185,7 @@ log_step_end "Setting file permissions"
 log_step_start "Restarting services"
 
 # Restart PHP-FPM (try php_fpm first as it's the FreeBSD service name)
-restart_service "php_fpm" "php-fpm"
+restart_service "php_fpm"
 
 # Restart Redis
 restart_service "redis"
