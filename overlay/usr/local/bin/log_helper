@@ -1,0 +1,119 @@
+#!/bin/sh
+
+# Log helper functions for verbose upgrade logging
+# Source this file in scripts that need verbose logging:
+#   . /usr/local/bin/log_helper
+
+# Log file location
+UPGRADE_LOG_FILE="${UPGRADE_LOG_FILE:-/var/log/nextcloud_upgrade.log}"
+
+# Initialize log file if it doesn't exist
+init_log() {
+    _log_dir=$(dirname "$UPGRADE_LOG_FILE")
+    mkdir -p "$_log_dir" 2>/dev/null || true
+    touch "$UPGRADE_LOG_FILE" 2>/dev/null || true
+}
+
+# Get timestamp in ISO format
+get_timestamp() {
+    date "+%Y-%m-%d %H:%M:%S"
+}
+
+# Log a message with timestamp to both console and log file
+log_msg() {
+    _level="$1"
+    shift
+    _msg="$*"
+    _timestamp=$(get_timestamp)
+    _formatted_msg="[${_timestamp}] [${_level}] ${_msg}"
+    echo "$_formatted_msg"
+    echo "$_formatted_msg" >> "$UPGRADE_LOG_FILE" 2>/dev/null || true
+}
+
+# Log info message
+log_info() {
+    log_msg "INFO" "$@"
+}
+
+# Log warning message
+log_warn() {
+    log_msg "WARN" "$@"
+}
+
+# Log error message
+log_error() {
+    log_msg "ERROR" "$@"
+}
+
+# Log step start (for tracking where scripts might be stuck)
+log_step_start() {
+    _step_name="$1"
+    log_msg "STEP" ">>> Starting: ${_step_name}"
+}
+
+# Log step completion
+log_step_end() {
+    _step_name="$1"
+    _status="${2:-completed}"
+    log_msg "STEP" "<<< Finished: ${_step_name} (${_status})"
+}
+
+# Run a command with logging (shows what command is being run and its result)
+log_cmd() {
+    _description="$1"
+    shift
+    _cmd="$*"
+    
+    log_msg "CMD" "Executing: ${_description}"
+    log_msg "CMD" "Command: ${_cmd}"
+    
+    # Run the command and capture both output and exit status
+    set +e
+    _output=$("$@" 2>&1)
+    _exit_status=$?
+    set -e
+    
+    if [ -n "$_output" ]; then
+        echo "$_output"
+        echo "$_output" >> "$UPGRADE_LOG_FILE" 2>/dev/null || true
+    fi
+    
+    if [ $_exit_status -eq 0 ]; then
+        log_msg "CMD" "Success: ${_description}"
+    else
+        log_msg "CMD" "Failed (exit code ${_exit_status}): ${_description}"
+    fi
+    
+    return $_exit_status
+}
+
+# Log separator for visual organization
+log_separator() {
+    _title="${1:-}"
+    _line="========================================"
+    if [ -n "$_title" ]; then
+        log_msg "INFO" "${_line}"
+        log_msg "INFO" "${_title}"
+        log_msg "INFO" "${_line}"
+    else
+        log_msg "INFO" "${_line}"
+    fi
+}
+
+# Log the start of a script
+log_script_start() {
+    _script_name="$1"
+    init_log
+    log_separator "${_script_name} - Started"
+    log_info "Log file: ${UPGRADE_LOG_FILE}"
+}
+
+# Log the end of a script
+log_script_end() {
+    _script_name="$1"
+    _status="${2:-completed successfully}"
+    log_separator "${_script_name} - ${_status}"
+}
+
+# Initialize log on source
+init_log

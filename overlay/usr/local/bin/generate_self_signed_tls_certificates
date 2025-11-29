@@ -2,15 +2,30 @@
 
 set -eu
 
+# Source logging helper if available
+if [ -f /usr/local/bin/log_helper ]; then
+    . /usr/local/bin/log_helper
+else
+    # Fallback logging functions if log_helper not available
+    log_info() { echo "[INFO] $*"; }
+    log_step_start() { echo ">>> Starting: $*"; }
+    log_step_end() { echo "<<< Finished: $*"; }
+    log_warn() { echo "[WARN] $*"; }
+fi
+
+log_step_start "generate_self_signed_tls_certificates"
+
 . load_env
 
 cert_path=/usr/local/etc/letsencrypt/live/truenas
 
+log_info "Certificate path: $cert_path"
 mkdir -p "$cert_path"
 
 # Prevent overriding existing root CA
 if [ ! -f "$cert_path/root.cer" ]
 then
+	log_info "Creating root CA..."
 	# Creating root CA.
 	openssl req \
 		-days 730 \
@@ -20,9 +35,13 @@ then
 		-keyout "$cert_path/root.key" \
 		-out "$cert_path/root.cer" \
 		-config "/root/tls/root_ca.conf"
+	log_info "Root CA created"
+else
+	log_info "Root CA already exists, reusing"
 fi
 
 # Generating TLS certificate.
+log_info "Generating TLS certificate..."
 envsubst "\${IOCAGE_JAIL_IP}" < "/root/tls/server_cert.conf.template" > "/root/tls/server_cert.conf"
 openssl req \
 	-nodes \
@@ -30,8 +49,10 @@ openssl req \
 	-keyout "$cert_path/server.key" \
 	-out "$cert_path/server.csr" \
 	-config "/root/tls/server_cert.conf"
+log_info "TLS certificate signing request created"
 
 # Signing certificate with root CA.
+log_info "Signing certificate with root CA..."
 openssl x509 \
 	-days 730 \
 	-req \
@@ -42,11 +63,16 @@ openssl x509 \
 	-out "$cert_path/server.cer" \
 	-extfile "/root/tls/server_cert.conf" \
 	-extensions x509_ext
+log_info "Certificate signed"
 
 # Copy certificates to Nginx exploitable files.
+log_info "Copying certificates for Nginx..."
 cp "$cert_path/server.cer" "$cert_path/fullchain.pem"
 cp "$cert_path/server.key" "$cert_path/privkey.pem"
 cp "$cert_path/root.cer" "$cert_path/chain.pem"
+log_info "Certificates copied to Nginx format"
+
+log_step_end "generate_self_signed_tls_certificates"
 
 echo ""
 echo "You can install the following CA on your devices to trust the TLS certificate: $cert_path/root.cer"

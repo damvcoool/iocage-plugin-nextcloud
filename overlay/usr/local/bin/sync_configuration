@@ -2,6 +2,19 @@
 
 set -eu
 
+# Source logging helper if available
+if [ -f /usr/local/bin/log_helper ]; then
+    . /usr/local/bin/log_helper
+else
+    # Fallback logging functions if log_helper not available
+    log_info() { echo "[INFO] $*"; }
+    log_step_start() { echo ">>> Starting: $*"; }
+    log_step_end() { echo "<<< Finished: $*"; }
+    log_warn() { echo "[WARN] $*"; }
+fi
+
+log_step_start "sync_configuration"
+
 . load_env
 
 NGINX_CONFD_PATH=/usr/local/etc/nginx/conf.d
@@ -9,13 +22,21 @@ OCPS_CONF="${NGINX_CONFD_PATH}/ocps-stapling.conf"
 CERT_PATH=/usr/local/etc/letsencrypt/live/truenas
 
 # Copy PostgreSQL configuration if it exists
+log_info "Checking PostgreSQL configuration..."
 if [ -f /root/config/postgresql.conf ]; then
     cp /root/config/postgresql.conf /usr/local/etc/postgresql/data18/postgresql.conf 2>/dev/null || true
+    log_info "PostgreSQL configuration copied"
+else
+    log_info "No custom PostgreSQL configuration found"
 fi
 
 # Copy Redis configuration if it exists and service is enabled
+log_info "Checking Redis configuration..."
 if [ -f /root/config/redis.conf ]; then
     cp /root/config/redis.conf /usr/local/etc/redis.conf 2>/dev/null || true
+    log_info "Redis configuration copied"
+else
+    log_info "No custom Redis configuration found"
 fi
 
 # Two cases:
@@ -31,13 +52,17 @@ has_letsencrypt_cert() {
         openssl x509 -in "${CERT_PATH}/fullchain.pem" -issuer -noout 2>/dev/null | grep -qiE "Let's Encrypt|ISRG Root"
 }
 
+log_info "Checking for Let's Encrypt certificates..."
 if has_letsencrypt_cert; then
     # using letsencrypt so enable OCSP stapling
+    log_info "Let's Encrypt certificate detected, enabling OCSP stapling"
     if [ ! -e "$OCPS_CONF" ]; then
         ln -s "${OCPS_CONF}.template" "$OCPS_CONF"
+        log_info "OCSP stapling configuration linked"
     fi
 else
     NEXTCLOUD_HTTPS_PORT=$IOCAGE_HOST_PORT_HTTPS
+    log_info "No Let's Encrypt certificate, using port $NEXTCLOUD_HTTPS_PORT"
     # disable OCPS stapling
     rm -f "$OCPS_CONF"
 fi
@@ -47,12 +72,21 @@ SCHEME=https
 if [ "${ALLOW_INSECURE_ACCESS:-false}" = "true" ]; 
 then
     SCHEME=http
+    log_info "ALLOW_INSECURE_ACCESS is true, using HTTP"
+else
+    log_info "Using HTTPS"
 fi
 
+log_info "Generating nginx configuration for $SCHEME..."
 NEXTCLOUD_CONF="${NGINX_CONFD_PATH}/nextcloud.${SCHEME}.conf"
 envsubst '$NEXTCLOUD_HTTPS_PORT' <"${NEXTCLOUD_CONF}.template" >"$NEXTCLOUD_CONF"
+log_info "Nginx configuration generated: $NEXTCLOUD_CONF"
 
 # Copy Nextcloud custom configuration
+log_info "Copying Nextcloud custom configuration..."
 cp /root/config/truenas.config.php /usr/local/www/nextcloud/config/truenas.config.php
 chown -R www:www /usr/local/www/nextcloud/config
 chmod -R u+rw /usr/local/www/nextcloud/config
+log_info "Nextcloud configuration updated"
+
+log_step_end "sync_configuration"

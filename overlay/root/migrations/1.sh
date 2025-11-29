@@ -2,39 +2,72 @@
 
 set -eu
 
+# Source logging helper if available
+if [ -f /usr/local/bin/log_helper ]; then
+    . /usr/local/bin/log_helper
+else
+    # Fallback logging functions if log_helper not available
+    log_info() { echo "[INFO] $*"; }
+    log_step_start() { echo ">>> Starting: $*"; }
+    log_step_end() { echo "<<< Finished: $*"; }
+    log_warn() { echo "[WARN] $*"; }
+    log_error() { echo "[ERROR] $*"; }
+fi
+
+log_step_start "Migration 1: Initial setup"
+
 # Generate certificates so nginx is happy
+log_info "Generating self-signed TLS certificates..."
 generate_self_signed_tls_certificates
 
 # Enable and start new services
+log_info "Enabling Redis service..."
 sysrc -f /etc/rc.conf redis_enable="YES"
+log_info "Enabling Fail2ban service..."
 sysrc -f /etc/rc.conf fail2ban_enable="YES"
 
 # Check if we have PostgreSQL or MySQL
+log_info "Checking database services..."
 if service postgresql status >/dev/null 2>&1; then
     # Already on PostgreSQL
-    echo "PostgreSQL already running"
+    log_info "PostgreSQL already running"
     service postgresql restart 2>/dev/null
 elif service mysql-server status >/dev/null 2>&1; then
     # Still on MySQL
+    log_info "MySQL detected, configuring MySQL..."
     sysrc -f /etc/rc.conf mysql_enable="YES"
     service mysql-server start 2>/dev/null
     
     # Wait for mysql to be up
+    log_info "Waiting for MySQL to be ready..."
     until mysql --user dbadmin --password="$(cat /root/dbpassword)" --execute "SHOW DATABASES" > /dev/null 2>/dev/null
     do
-        echo "MariaDB is unavailable - sleeping"
+        log_info "MariaDB is unavailable - sleeping"
         sleep 1
     done
+    log_info "MySQL is ready"
+else
+    log_info "No database service running"
 fi
 
+log_info "Starting Redis..."
 service redis start 2>/dev/null
+log_info "Starting Fail2ban..."
 service fail2ban start 2>/dev/null
 
 # Change cron execution method
+log_info "Configuring Nextcloud background jobs..."
 su -m www -c "php /usr/local/www/nextcloud/occ background:cron"
 
 # Install default applications
+log_info "Installing default applications..."
+log_info "Installing contacts app..."
 su -m www -c "php /usr/local/www/nextcloud/occ app:install contacts" || true
+log_info "Installing calendar app..."
 su -m www -c "php /usr/local/www/nextcloud/occ app:install calendar" || true
+log_info "Installing notes app..."
 su -m www -c "php /usr/local/www/nextcloud/occ app:install notes" || true
+log_info "Installing deck app..."
 su -m www -c "php /usr/local/www/nextcloud/occ app:install deck" || true
+
+log_step_end "Migration 1: Initial setup"
