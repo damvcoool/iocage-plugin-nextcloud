@@ -210,7 +210,13 @@ log_info "Executing: occ upgrade"
 su -m www -c "php /usr/local/www/nextcloud/occ upgrade" 2>/dev/null || true
 log_step_end "Running Nextcloud upgrade"
 
-# Add missing database indices
+# Verify and repair Nextcloud data
+log_step_start "Verifying and repairing Nextcloud data"
+log_info "Executing: occ maintenance:repair"
+su -m www -c "php /usr/local/www/nextcloud/occ maintenance:repair" 2>/dev/null || true
+log_step_end "Verifying and repairing Nextcloud data"
+
+# Add missing database indices and columns
 log_step_start "Adding missing database indices and columns"
 log_info "Executing: occ db:add-missing-indices"
 su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-indices" 2>/dev/null || true
@@ -218,7 +224,15 @@ log_info "Executing: occ db:add-missing-columns"
 su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-columns" 2>/dev/null || true
 log_info "Executing: occ db:add-missing-primary-keys"
 su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-primary-keys" 2>/dev/null || true
+log_info "Executing: occ db:convert-filecache-bigint"
+su -m www -c "php /usr/local/www/nextcloud/occ db:convert-filecache-bigint --no-interaction" 2>/dev/null || true
 log_step_end "Adding missing database indices and columns"
+
+# Update all apps if needed
+log_step_start "Updating Nextcloud apps"
+log_info "Executing: occ app:update --all"
+su -m www -c "php /usr/local/www/nextcloud/occ app:update --all" 2>/dev/null || true
+log_step_end "Updating Nextcloud apps"
 
 # Disable maintenance mode
 log_step_start "Disabling maintenance mode"
