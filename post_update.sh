@@ -211,10 +211,22 @@ start_or_restart_service "redis"
 # Check which database is enabled in rc.conf to avoid checking non-existent services
 if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
     # Check if PostgreSQL needs initialization (MySQL to PostgreSQL transition)
-    if [ ! -d /var/db/postgres/data18 ] && [ ! -d /var/db/postgres/data17 ] && [ ! -d /var/db/postgres/data ]; then
+    # Look for any postgres data directory (supports different PostgreSQL versions)
+    PG_DATA_FOUND=0
+    for pg_data_dir in /var/db/postgres/data* ; do
+        if [ -d "$pg_data_dir" ]; then
+            PG_DATA_FOUND=1
+            break
+        fi
+    done
+    
+    if [ "$PG_DATA_FOUND" = "0" ]; then
         log_info "PostgreSQL not initialized - initializing now..."
-        /usr/local/etc/rc.d/postgresql oneinitdb 2>/dev/null || true
-        log_info "PostgreSQL initialized"
+        if /usr/local/etc/rc.d/postgresql oneinitdb 2>/dev/null; then
+            log_info "PostgreSQL initialized successfully"
+        else
+            log_warn "PostgreSQL initialization may have failed - service start will be attempted"
+        fi
     fi
     start_or_restart_service "postgresql"
 elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then

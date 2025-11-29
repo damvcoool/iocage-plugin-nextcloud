@@ -415,17 +415,27 @@ if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
     # Disable MySQL in rc.conf (the package will be removed/replaced)
     if grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
         log_info "Disabling mysql_enable in rc.conf..."
-        sysrc -f /etc/rc.conf mysql_enable="NO" 2>/dev/null || true
-        log_info "mysql_enable set to NO"
+        if sysrc -f /etc/rc.conf mysql_enable="NO" 2>/dev/null; then
+            log_info "mysql_enable set to NO"
+        else
+            log_warn "Failed to set mysql_enable to NO"
+        fi
     fi
     # Pre-enable PostgreSQL so post_update knows to use it
     log_info "Enabling postgresql_enable in rc.conf..."
-    sysrc -f /etc/rc.conf postgresql_enable="YES" 2>/dev/null || true
-    log_info "postgresql_enable set to YES"
+    if sysrc -f /etc/rc.conf postgresql_enable="YES" 2>/dev/null; then
+        log_info "postgresql_enable set to YES"
+    else
+        log_warn "Failed to set postgresql_enable to YES"
+    fi
     # Set PostgreSQL init flags for when it gets initialized
     log_info "Setting postgresql_initdb_flags..."
-    sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust" 2>/dev/null || true
-    log_info "rc.conf updated for MySQL to PostgreSQL transition"
+    if sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust" 2>/dev/null; then
+        log_info "postgresql_initdb_flags set successfully"
+    else
+        log_warn "Failed to set postgresql_initdb_flags"
+    fi
+    log_info "rc.conf update for MySQL to PostgreSQL transition completed"
 elif [ "$DETECTED_DB_TYPE" = "$DB_TYPE_POSTGRESQL" ]; then
     log_info "PostgreSQL already in use - no rc.conf changes needed for database"
 else
