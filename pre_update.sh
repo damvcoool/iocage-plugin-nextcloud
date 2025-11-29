@@ -193,6 +193,9 @@ detect_db_from_running_services() {
 
 # Try detection methods in order of reliability
 DETECTED_DB_TYPE=""
+# Track whether we started a DB service for the backup so we can stop it afterwards
+POSTGRES_STARTED=0
+MYSQL_STARTED=0
 
 # Method 1: Check Nextcloud configuration (most reliable)
 log_info "Checking Nextcloud config for database type..."
@@ -231,6 +234,7 @@ case "$DETECTED_DB_TYPE" in
         if ! service postgresql status >/dev/null 2>&1; then
             log_info "Starting PostgreSQL for backup..."
             service postgresql start 2>/dev/null || true
+            POSTGRES_STARTED=1
             # Wait for PostgreSQL to be ready
             max_wait=30
             waited=0
@@ -262,6 +266,7 @@ case "$DETECTED_DB_TYPE" in
         if ! service mysql-server status >/dev/null 2>&1; then
             log_info "Starting MySQL for backup..."
             service mysql-server start 2>/dev/null || true
+            MYSQL_STARTED=1
             # Wait for MySQL to be ready
             max_wait=30
             waited=0
@@ -297,6 +302,38 @@ case "$DETECTED_DB_TYPE" in
         ;;
 esac
 log_step_end "Performing database backup"
+
+# After a successful backup, stop the database server(s) we started for the backup.
+# We only stop the service if:
+#  - we started it in this script (POSTGRES_STARTED or MYSQL_STARTED is set), and
+#  - the backup file exists and is non-empty (indicating a successful backup).
+log_step_start "Stopping database services started for backup"
+if [ "$POSTGRES_STARTED" = "1" ]; then
+    if [ -s "$BACKUP_DIR/nextcloud_pg.sql" ]; then
+        log_info "Stopping PostgreSQL (was started for backup)..."
+        if service postgresql stop >/dev/null 2>&1; then
+            log_info "PostgreSQL stopped"
+        else
+            log_warn "Failed to stop PostgreSQL"
+        fi
+    else
+        log_warn "PostgreSQL was started for backup but backup file not found or empty; not stopping PostgreSQL"
+    fi
+fi
+
+if [ "$MYSQL_STARTED" = "1" ]; then
+    if [ -s "$BACKUP_DIR/nextcloud_mysql.sql" ]; then
+        log_info "Stopping MySQL (was started for backup)..."
+        if service mysql-server stop >/dev/null 2>&1; then
+            log_info "MySQL stopped"
+        else
+            log_warn "Failed to stop MySQL"
+        fi
+    else
+        log_warn "MySQL was started for backup but backup file not found or empty; not stopping MySQL"
+    fi
+fi
+log_step_end "Stopping database services started for backup"
 
 echo "$DETECTED_DB_TYPE" > "$BACKUP_DIR/database_type.txt"
 log_info "Database type saved: $DETECTED_DB_TYPE"
