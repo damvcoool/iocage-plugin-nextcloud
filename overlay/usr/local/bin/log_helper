@@ -68,7 +68,10 @@ log_cmd() {
     log_msg "CMD" "Command: ${_cmd}"
     
     # Run the command and capture both output and exit status
-    _output=$("$@" 2>&1) && _exit_status=$? || _exit_status=$?
+    set +e
+    _output=$("$@" 2>&1)
+    _exit_status=$?
+    set -e
     
     if [ -n "$_output" ]; then
         echo "$_output"

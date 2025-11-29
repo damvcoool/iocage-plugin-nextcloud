@@ -237,7 +237,10 @@ case "$DETECTED_DB_TYPE" in
             while ! service postgresql status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
                 sleep 1
                 waited=$((waited + 1))
-                log_info "Waiting for PostgreSQL... ($waited/$max_wait)"
+                # Log only every 5 seconds to reduce log noise
+                if [ $((waited % 5)) -eq 0 ]; then
+                    log_info "Waiting for PostgreSQL... ($waited/$max_wait)"
+                fi
             done
         fi
         if [ -n "$DB_PASS" ]; then
@@ -265,7 +268,10 @@ case "$DETECTED_DB_TYPE" in
             while ! service mysql-server status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
                 sleep 1
                 waited=$((waited + 1))
-                log_info "Waiting for MySQL... ($waited/$max_wait)"
+                # Log only every 5 seconds to reduce log noise
+                if [ $((waited % 5)) -eq 0 ]; then
+                    log_info "Waiting for MySQL... ($waited/$max_wait)"
+                fi
             done
         fi
         if [ -n "$DB_PASS" ]; then

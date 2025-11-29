@@ -31,7 +31,7 @@ restart_service() {
         service "$alt_name" restart 2>/dev/null || true
         log_info "Service $alt_name restarted"
     else
-        log_info "Service $service_name not running, skip restart"
+        log_info "Service $service_name not running, skipping restart"
     fi
 }
 
