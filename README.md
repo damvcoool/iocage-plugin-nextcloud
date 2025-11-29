@@ -143,6 +143,23 @@ The plugin uses iocage's `pre_update.sh` and `post_update.sh` hooks for a smooth
    - Adds missing database indices
    - Disables maintenance mode
 
+### Verbose Logging
+
+The update scripts include verbose logging with timestamps to help identify where issues might occur. All log messages are displayed on the console and also written to `/var/log/nextcloud_upgrade.log`.
+
+Log messages include:
+- **Timestamps**: Each log entry includes a timestamp in `YYYY-MM-DD HH:MM:SS` format
+- **Log levels**: INFO, WARN, ERROR, STEP, and CMD for different message types
+- **Step tracking**: Each major operation is logged with ">>> Starting:" and "<<< Finished:" markers
+
+To view the upgrade log after an update:
+```bash
+iocage console <nextcloud_jail_name>
+cat /var/log/nextcloud_upgrade.log
+```
+
+If an upgrade gets stuck, the last log entry will indicate which step was being executed when the issue occurred.
+
 All backups are stored in `/root/pre_update_backup_<timestamp>/` for recovery if needed.
 
 ## Scripts
