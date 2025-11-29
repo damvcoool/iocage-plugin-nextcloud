@@ -34,7 +34,8 @@ then
 		-new \
 		-keyout "$cert_path/root.key" \
 		-out "$cert_path/root.cer" \
-		-config "/root/tls/root_ca.conf"
+		-config "/root/tls/root_ca.conf" \
+		2>/dev/null
 	log_info "Root CA created"
 else
 	log_info "Root CA already exists, reusing"
@@ -48,7 +49,8 @@ openssl req \
 	-new \
 	-keyout "$cert_path/server.key" \
 	-out "$cert_path/server.csr" \
-	-config "/root/tls/server_cert.conf"
+	-config "/root/tls/server_cert.conf" \
+	2>/dev/null
 log_info "TLS certificate signing request created"
 
 # Signing certificate with root CA.
@@ -62,7 +64,8 @@ openssl x509 \
 	-set_serial 0x"$(openssl rand --hex 16)" \
 	-out "$cert_path/server.cer" \
 	-extfile "/root/tls/server_cert.conf" \
-	-extensions x509_ext
+	-extensions x509_ext \
+	2>/dev/null
 log_info "Certificate signed"
 
 # Copy certificates to Nginx exploitable files.
