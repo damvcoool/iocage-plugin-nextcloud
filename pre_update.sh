@@ -354,6 +354,86 @@ log_step_end "Saving migration state"
 echo "$BACKUP_DIR" > /root/last_pre_update_backup
 log_info "Backup location saved to /root/last_pre_update_backup"
 
+# Stop all services before package update to ensure clean transition
+# This is critical when transitioning from MySQL to PostgreSQL
+log_step_start "Stopping all services before package update"
+
+# Stop nginx first (depends on php-fpm and database)
+log_info "Stopping nginx..."
+if service nginx stop >/dev/null 2>&1; then
+    log_info "nginx stopped"
+else
+    log_info "nginx was not running or failed to stop"
+fi
+
+# Stop php-fpm
+log_info "Stopping php-fpm..."
+if service php_fpm stop >/dev/null 2>&1; then
+    log_info "php-fpm stopped"
+else
+    # Try alternative service name
+    if service php-fpm stop >/dev/null 2>&1; then
+        log_info "php-fpm stopped (alternative name)"
+    else
+        log_info "php-fpm was not running or failed to stop"
+    fi
+fi
+
+# Stop redis
+log_info "Stopping redis..."
+if service redis stop >/dev/null 2>&1; then
+    log_info "redis stopped"
+else
+    log_info "redis was not running or failed to stop"
+fi
+
+# Stop fail2ban
+log_info "Stopping fail2ban..."
+if service fail2ban stop >/dev/null 2>&1; then
+    log_info "fail2ban stopped"
+else
+    log_info "fail2ban was not running or failed to stop"
+fi
+
+# Stop database services (both MySQL and PostgreSQL if running)
+log_info "Stopping database services..."
+if service mysql-server stop >/dev/null 2>&1; then
+    log_info "MySQL stopped"
+fi
+if service postgresql stop >/dev/null 2>&1; then
+    log_info "PostgreSQL stopped"
+fi
+
+log_step_end "Stopping all services before package update"
+
+# Update rc.conf to handle MySQL to PostgreSQL transition
+# This ensures post_update.sh sees the correct service configuration
+log_step_start "Updating rc.conf for database transition"
+
+if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
+    log_info "MySQL detected - preparing rc.conf for PostgreSQL transition"
+    # Disable MySQL in rc.conf (the package will be removed/replaced)
+    if grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+        log_info "Disabling mysql_enable in rc.conf..."
+        sysrc -f /etc/rc.conf mysql_enable="NO" 2>/dev/null || true
+        log_info "mysql_enable set to NO"
+    fi
+    # Pre-enable PostgreSQL so post_update knows to use it
+    log_info "Enabling postgresql_enable in rc.conf..."
+    sysrc -f /etc/rc.conf postgresql_enable="YES" 2>/dev/null || true
+    log_info "postgresql_enable set to YES"
+    # Set PostgreSQL init flags for when it gets initialized
+    log_info "Setting postgresql_initdb_flags..."
+    sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust" 2>/dev/null || true
+    log_info "rc.conf updated for MySQL to PostgreSQL transition"
+elif [ "$DETECTED_DB_TYPE" = "$DB_TYPE_POSTGRESQL" ]; then
+    log_info "PostgreSQL already in use - no rc.conf changes needed for database"
+else
+    log_info "No database detected - fresh install, no rc.conf changes needed"
+fi
+
+log_step_end "Updating rc.conf for database transition"
+
 # Log completion
 if [ -f /usr/local/bin/log_helper ]; then
     log_script_end "Pre-update backup" "completed successfully"

@@ -18,8 +18,9 @@ else
     echo "========================================"
 fi
 
-# Helper function to restart a service if it's running
-restart_service() {
+# Helper function to start or restart a service
+# If the service is running, restart it. If not running but enabled, start it.
+start_or_restart_service() {
     service_name="$1"
     alt_name="${2:-}"
     
@@ -44,7 +45,23 @@ restart_service() {
         fi
     fi
     
-    log_info "Service $service_name not running, skipping restart"
+    # Service is not running - try to start it if enabled in rc.conf
+    log_info "Service $service_name not running, attempting to start..."
+    if service "$service_name" start >/dev/null 2>&1; then
+        log_info "Service $service_name started"
+        return 0
+    fi
+    
+    # Try alternative service name if provided
+    if [ -n "$alt_name" ]; then
+        log_info "Trying to start alternative service: $alt_name"
+        if service "$alt_name" start >/dev/null 2>&1; then
+            log_info "Service $alt_name started"
+            return 0
+        fi
+    fi
+    
+    log_info "Service $service_name could not be started (may not be enabled or installed)"
     return 0
 }
 
@@ -182,27 +199,33 @@ chown -R www:www /usr/local/www/nextcloud
 log_step_end "Setting file permissions"
 
 # Restart services to apply any configuration changes
-log_step_start "Restarting services"
+log_step_start "Starting/Restarting services"
 
-# Restart PHP-FPM (try php_fpm first as it's the FreeBSD service name)
-restart_service "php_fpm"
+# Start/Restart PHP-FPM (try php_fpm first as it's the FreeBSD service name)
+start_or_restart_service "php_fpm"
 
-# Restart Redis
-restart_service "redis"
+# Start/Restart Redis
+start_or_restart_service "redis"
 
-# Restart the appropriate database (only one should be running)
+# Start/Restart the appropriate database
 # Check which database is enabled in rc.conf to avoid checking non-existent services
 if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
-    restart_service "postgresql"
+    # Check if PostgreSQL needs initialization (MySQL to PostgreSQL transition)
+    if [ ! -d /var/db/postgres/data18 ] && [ ! -d /var/db/postgres/data17 ] && [ ! -d /var/db/postgres/data ]; then
+        log_info "PostgreSQL not initialized - initializing now..."
+        /usr/local/etc/rc.d/postgresql oneinitdb 2>/dev/null || true
+        log_info "PostgreSQL initialized"
+    fi
+    start_or_restart_service "postgresql"
 elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
-    restart_service "mysql-server"
+    start_or_restart_service "mysql-server"
 else
-    log_info "No database service enabled in rc.conf, skipping database restart"
+    log_info "No database service enabled in rc.conf, skipping database start"
 fi
 
-# Restart nginx
-restart_service "nginx"
-log_step_end "Restarting services"
+# Start/Restart nginx
+start_or_restart_service "nginx"
+log_step_end "Starting/Restarting services"
 
 # Run Nextcloud upgrade if needed
 log_step_start "Running Nextcloud upgrade"
