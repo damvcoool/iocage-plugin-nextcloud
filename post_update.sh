@@ -23,16 +23,29 @@ restart_service() {
     service_name="$1"
     alt_name="${2:-}"
     
-    log_info "Attempting to restart service: $service_name"
+    log_info "Checking service: $service_name"
+    
+    # Try primary service name first
     if service "$service_name" status >/dev/null 2>&1; then
+        log_info "Service $service_name is running, restarting..."
         service "$service_name" restart 2>/dev/null || true
         log_info "Service $service_name restarted"
-    elif [ -n "$alt_name" ] && service "$alt_name" status >/dev/null 2>&1; then
-        service "$alt_name" restart 2>/dev/null || true
-        log_info "Service $alt_name restarted"
-    else
-        log_info "Service $service_name not running, skipping restart"
+        return 0
     fi
+    
+    # Try alternative service name if provided
+    if [ -n "$alt_name" ]; then
+        log_info "Trying alternative service name: $alt_name"
+        if service "$alt_name" status >/dev/null 2>&1; then
+            log_info "Service $alt_name is running, restarting..."
+            service "$alt_name" restart 2>/dev/null || true
+            log_info "Service $alt_name restarted"
+            return 0
+        fi
+    fi
+    
+    log_info "Service $service_name not running, skipping restart"
+    return 0
 }
 
 # Load environment
@@ -171,15 +184,21 @@ log_step_end "Setting file permissions"
 # Restart services to apply any configuration changes
 log_step_start "Restarting services"
 
-# Restart PHP-FPM (try both service name variants)
-restart_service "php-fpm" "php_fpm"
+# Restart PHP-FPM (try php_fpm first as it's the FreeBSD service name)
+restart_service "php_fpm" "php-fpm"
 
 # Restart Redis
 restart_service "redis"
 
-# Restart the appropriate database
-restart_service "postgresql"
-restart_service "mysql-server"
+# Restart the appropriate database (only one should be running)
+# Check which database is enabled in rc.conf to avoid checking non-existent services
+if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+    restart_service "postgresql"
+elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+    restart_service "mysql-server"
+else
+    log_info "No database service enabled in rc.conf, skipping database restart"
+fi
 
 # Restart nginx
 restart_service "nginx"
