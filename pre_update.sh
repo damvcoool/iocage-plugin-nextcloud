@@ -428,10 +428,50 @@ if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
     
     # Install PostgreSQL if not already installed
     log_info "Installing PostgreSQL..."
-    if pkg install -y postgresql18-server postgresql18-client >/dev/null 2>&1; then
+    if pkg install -y postgresql17-server postgresql17-client >/dev/null 2>&1; then
         log_info "PostgreSQL installed successfully"
     else
         log_warn "PostgreSQL may already be installed or installation failed"
+    fi
+    
+    # Install PHP PostgreSQL extension required for occ db:convert-type
+    # Detect the installed PHP version and install the matching pdo_pgsql extension
+    log_info "Installing PHP PostgreSQL extension for database migration..."
+    PHP_PGSQL_INSTALLED=0
+    PHP_VERSION=$(php -v 2>/dev/null | head -1 | awk '{print $2}' | cut -d. -f1,2 | tr -d '.')
+    # Validate PHP_VERSION is a 2-digit number (e.g., 84, 83, 82)
+    if [ -n "$PHP_VERSION" ] && echo "$PHP_VERSION" | grep -qE '^[0-9]{2}$'; then
+        log_info "Detected PHP version: $PHP_VERSION"
+        if pkg install -y "php${PHP_VERSION}-pdo_pgsql" >/dev/null 2>&1; then
+            log_info "PHP PostgreSQL extension installed successfully"
+            PHP_PGSQL_INSTALLED=1
+        else
+            log_warn "PHP PostgreSQL extension may already be installed or installation failed"
+            # Check if extension is already installed
+            if php -m 2>/dev/null | grep -qi "pdo_pgsql"; then
+                log_info "PHP PostgreSQL extension is already available"
+                PHP_PGSQL_INSTALLED=1
+            fi
+        fi
+    else
+        log_warn "Could not detect PHP version, trying common versions..."
+        # Try common PHP versions (84, 83, 82) as fallback
+        for ver in 84 83 82; do
+            if pkg install -y "php${ver}-pdo_pgsql" >/dev/null 2>&1; then
+                log_info "PHP PostgreSQL extension (php${ver}-pdo_pgsql) installed successfully"
+                PHP_PGSQL_INSTALLED=1
+                break
+            fi
+        done
+    fi
+    
+    # Final check if PHP PostgreSQL extension is available
+    if [ "$PHP_PGSQL_INSTALLED" = "0" ]; then
+        if php -m 2>/dev/null | grep -qi "pdo_pgsql"; then
+            log_info "PHP PostgreSQL extension is already available"
+        else
+            log_warn "Failed to install PHP PostgreSQL extension - occ db:convert-type may fail"
+        fi
     fi
     
     # Enable PostgreSQL in rc.conf
@@ -520,7 +560,7 @@ if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
             
             # Run the migration using environment variable for password (more secure than command line)
             export OCC_DB_PASS="$DB_PASS"
-            if su -m www -c "php /usr/local/www/nextcloud/occ db:convert-type --all-apps --password \"\$OCC_DB_PASS\" pgsql '$DB_USER' localhost '$DB_NAME'" 2>&1; then
+            if su -m www -c "php /usr/local/www/nextcloud/occ db:convert-type --no-interaction --all-apps --password \"\$OCC_DB_PASS\" pgsql '$DB_USER' localhost '$DB_NAME'" 2>&1; then
                 log_info "Database migration completed successfully!"
                 MIGRATION_DONE=1
                 
