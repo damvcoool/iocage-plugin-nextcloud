@@ -419,43 +419,142 @@ fi
 
 log_step_end "Stopping all services before package update"
 
-# Update rc.conf to handle MySQL to PostgreSQL transition
-# This ensures post_update.sh sees the correct service configuration
-log_step_start "Updating rc.conf for database transition"
+# MySQL to PostgreSQL migration using occ db:convert-type
+# This migration must happen BEFORE the plugin upgrade removes MySQL
+log_step_start "MySQL to PostgreSQL migration (if needed)"
 
 if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
-    log_info "MySQL detected - preparing rc.conf for PostgreSQL transition"
-    # Disable MySQL in rc.conf (the package will be removed/replaced)
-    if grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
-        log_info "Disabling mysql_enable in rc.conf..."
-        if sysrc -f /etc/rc.conf mysql_enable="NO" 2>/dev/null; then
-            log_info "mysql_enable set to NO"
+    log_info "MySQL detected - performing database migration using occ db:convert-type"
+    
+    # Install PostgreSQL if not already installed
+    log_info "Installing PostgreSQL..."
+    if pkg install -y postgresql18-server postgresql18-client >/dev/null 2>&1; then
+        log_info "PostgreSQL installed successfully"
+    else
+        log_warn "PostgreSQL may already be installed or installation failed"
+    fi
+    
+    # Enable PostgreSQL in rc.conf
+    log_info "Enabling PostgreSQL in rc.conf..."
+    sysrc -f /etc/rc.conf postgresql_enable="YES" 2>/dev/null || true
+    sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust" 2>/dev/null || true
+    
+    # Initialize PostgreSQL if needed
+    PG_DATA_FOUND=0
+    for pg_data_dir in /var/db/postgres/data* ; do
+        if [ -d "$pg_data_dir" ]; then
+            PG_DATA_FOUND=1
+            break
+        fi
+    done
+    
+    if [ "$PG_DATA_FOUND" = "0" ]; then
+        log_info "Initializing PostgreSQL database..."
+        mkdir -p /var/log/postgresql
+        chown postgres:postgres /var/log/postgresql 2>/dev/null || true
+        if /usr/local/etc/rc.d/postgresql oneinitdb 2>/dev/null; then
+            log_info "PostgreSQL initialized successfully"
         else
-            log_warn "Failed to set mysql_enable to NO"
+            log_warn "PostgreSQL initialization may have failed"
         fi
     fi
-    # Pre-enable PostgreSQL so post_update knows to use it
-    log_info "Enabling postgresql_enable in rc.conf..."
-    if sysrc -f /etc/rc.conf postgresql_enable="YES" 2>/dev/null; then
-        log_info "postgresql_enable set to YES"
+    
+    # Start PostgreSQL
+    log_info "Starting PostgreSQL..."
+    service postgresql start 2>/dev/null || true
+    
+    # Wait for PostgreSQL to be ready
+    max_wait=30
+    waited=0
+    while ! su -m postgres -c "psql -c 'SELECT 1'" >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
+        sleep 1
+        waited=$((waited + 1))
+        if [ $((waited % 5)) -eq 0 ]; then
+            log_info "Waiting for PostgreSQL... ($waited/$max_wait)"
+        fi
+    done
+    
+    if su -m postgres -c "psql -c 'SELECT 1'" >/dev/null 2>&1; then
+        log_info "PostgreSQL is ready"
+        
+        # Create PostgreSQL user and database for the migration
+        log_info "Creating PostgreSQL user and database..."
+        
+        # Escape single quotes in password for SQL
+        DB_PASS_SQL=$(printf '%s' "$DB_PASS" | sed "s/'/''/g")
+        
+        # Check if database already exists
+        if su -m postgres -c "psql -lqt | cut -d \| -f 1 | grep -qw $DB_NAME" 2>/dev/null; then
+            log_info "PostgreSQL database '$DB_NAME' already exists"
+        else
+            # Create user and database
+            # Note: Password is passed via ALTER USER which is slightly more secure
+            su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH NOSUPERUSER NOCREATEDB NOCREATEROLE;\"" 2>/dev/null || true
+            su -m postgres -c "psql -c \"ALTER USER $DB_USER WITH PASSWORD '$DB_PASS_SQL';\"" 2>/dev/null || true
+            su -m postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER ENCODING 'UTF8' TEMPLATE template0;\"" 2>/dev/null || true
+            su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" 2>/dev/null || true
+            su -m postgres -c "psql -d $DB_NAME -c \"GRANT ALL ON SCHEMA public TO $DB_USER;\"" 2>/dev/null || true
+            log_info "PostgreSQL user and database created"
+        fi
+        
+        # Ensure MySQL is running for the migration
+        if ! service mysql-server status >/dev/null 2>&1; then
+            log_info "Starting MySQL for migration..."
+            service mysql-server start 2>/dev/null || true
+            sleep 3
+        fi
+        
+        # Check if PostgreSQL already has Nextcloud data (migration already done)
+        if su -m postgres -c "psql -d $DB_NAME -c \"SELECT 1 FROM oc_users LIMIT 1\"" >/dev/null 2>&1; then
+            log_info "PostgreSQL already has Nextcloud data - migration not needed"
+            MIGRATION_DONE=1
+        else
+            MIGRATION_DONE=0
+            
+            # Run occ db:convert-type to migrate from MySQL to PostgreSQL
+            log_info "Running Nextcloud database migration (occ db:convert-type)..."
+            log_info "This may take several minutes depending on database size..."
+            
+            # Make sure Nextcloud is NOT in maintenance mode for this operation
+            su -m www -c "php /usr/local/www/nextcloud/occ maintenance:mode --off" 2>/dev/null || true
+            
+            # Run the migration using environment variable for password (more secure than command line)
+            export OCC_DB_PASS="$DB_PASS"
+            if su -m www -c "php /usr/local/www/nextcloud/occ db:convert-type --all-apps --password \"\$OCC_DB_PASS\" pgsql '$DB_USER' localhost '$DB_NAME'" 2>&1; then
+                log_info "Database migration completed successfully!"
+                MIGRATION_DONE=1
+                
+                # Save migration status for post_update
+                echo "occ_convert_success" > "$BACKUP_DIR/migration_method.txt"
+            else
+                log_warn "occ db:convert-type failed - will fall back to SQL conversion in post_update"
+                echo "occ_convert_failed" > "$BACKUP_DIR/migration_method.txt"
+            fi
+            unset OCC_DB_PASS
+        fi
+        
+        if [ "$MIGRATION_DONE" = "1" ]; then
+            log_info "Migration successful - stopping MySQL"
+            service mysql-server stop 2>/dev/null || true
+        fi
     else
-        log_warn "Failed to set postgresql_enable to YES"
+        log_warn "PostgreSQL did not start - migration will be attempted in post_update"
     fi
-    # Set PostgreSQL init flags for when it gets initialized
-    log_info "Setting postgresql_initdb_flags..."
-    if sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust" 2>/dev/null; then
-        log_info "postgresql_initdb_flags set successfully"
-    else
-        log_warn "Failed to set postgresql_initdb_flags"
+    
+    # Disable MySQL in rc.conf (will be removed during upgrade)
+    if grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+        log_info "Disabling mysql_enable in rc.conf..."
+        sysrc -f /etc/rc.conf mysql_enable="NO" 2>/dev/null || true
     fi
-    log_info "rc.conf update for MySQL to PostgreSQL transition completed"
+    
+    log_info "MySQL to PostgreSQL migration preparation completed"
 elif [ "$DETECTED_DB_TYPE" = "$DB_TYPE_POSTGRESQL" ]; then
-    log_info "PostgreSQL already in use - no rc.conf changes needed for database"
+    log_info "PostgreSQL already in use - no migration needed"
 else
-    log_info "No database detected - fresh install, no rc.conf changes needed"
+    log_info "No database detected - fresh install, no migration needed"
 fi
 
-log_step_end "Updating rc.conf for database transition"
+log_step_end "MySQL to PostgreSQL migration (if needed)"
 
 # Log completion
 if [ -f /usr/local/bin/log_helper ]; then
