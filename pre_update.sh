@@ -560,7 +560,7 @@ if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
             
             # Run the migration using environment variable for password (more secure than command line)
             export OCC_DB_PASS="$DB_PASS"
-            if su -m www -c "php /usr/local/www/nextcloud/occ db:convert-type --all-apps --password \"\$OCC_DB_PASS\" pgsql '$DB_USER' localhost '$DB_NAME'" 2>&1; then
+            if su -m www -c "php /usr/local/www/nextcloud/occ db:convert-type --no-interaction --all-apps --password \"\$OCC_DB_PASS\" pgsql '$DB_USER' localhost '$DB_NAME'" 2>&1; then
                 log_info "Database migration completed successfully!"
                 MIGRATION_DONE=1
                 
