@@ -48,6 +48,145 @@ DB_NAME="nextcloud"
 log_info "Database user: $DB_USER, Database name: $DB_NAME"
 log_step_end "Reading database credentials"
 
+# Function to detect database type from Nextcloud config
+detect_db_from_nextcloud_config() {
+    if [ -f /usr/local/www/nextcloud/config/config.php ]; then
+        # Extract dbtype from config.php (handle both single and double quotes)
+        NC_DBTYPE=$(grep "dbtype" /usr/local/www/nextcloud/config/config.php 2>/dev/null | sed "s/.*=> *[\"']\([^\"']*\)[\"'].*/\1/" | head -1)
+        case "$NC_DBTYPE" in
+            pgsql)
+                echo "$DB_TYPE_POSTGRESQL"
+                return 0
+                ;;
+            mysql)
+                echo "$DB_TYPE_MYSQL"
+                return 0
+                ;;
+        esac
+    fi
+    return 1
+}
+
+# Function to detect database type from rc.conf (enabled services)
+detect_db_from_rcconf() {
+    if [ -f /etc/rc.conf ]; then
+        if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+            echo "$DB_TYPE_POSTGRESQL"
+            return 0
+        elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+            echo "$DB_TYPE_MYSQL"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Function to detect database type from running services
+detect_db_from_running_services() {
+    if service postgresql status >/dev/null 2>&1; then
+        echo "$DB_TYPE_POSTGRESQL"
+        return 0
+    elif service mysql-server status >/dev/null 2>&1; then
+        echo "$DB_TYPE_MYSQL"
+        return 0
+    fi
+    return 1
+}
+
+# Detect database type early (needed for maintenance mode)
+log_step_start "Detecting database type"
+DETECTED_DB_TYPE=""
+
+# Method 1: Check Nextcloud configuration (most reliable)
+log_info "Checking Nextcloud config for database type..."
+if DETECTED_DB_TYPE=$(detect_db_from_nextcloud_config); then
+    log_info "Database type detected from Nextcloud config: $DETECTED_DB_TYPE"
+fi
+
+# Method 2: Check rc.conf for enabled services
+if [ -z "$DETECTED_DB_TYPE" ]; then
+    log_info "Checking rc.conf for database type..."
+    if DETECTED_DB_TYPE=$(detect_db_from_rcconf); then
+        log_info "Database type detected from rc.conf: $DETECTED_DB_TYPE"
+    fi
+fi
+
+# Method 3: Check running services
+if [ -z "$DETECTED_DB_TYPE" ]; then
+    log_info "Checking running services for database type..."
+    if DETECTED_DB_TYPE=$(detect_db_from_running_services); then
+        log_info "Database type detected from running services: $DETECTED_DB_TYPE"
+    fi
+fi
+
+# Default to none if no database detected
+if [ -z "$DETECTED_DB_TYPE" ]; then
+    DETECTED_DB_TYPE="$DB_TYPE_NONE"
+    log_info "No database detected (fresh install?)"
+fi
+log_step_end "Detecting database type"
+
+# Track whether we started a DB service so we can stop it afterwards
+POSTGRES_STARTED=0
+MYSQL_STARTED=0
+
+# Start database service if not running (needed for maintenance mode and backup)
+log_step_start "Ensuring database service is running"
+case "$DETECTED_DB_TYPE" in
+    "$DB_TYPE_POSTGRESQL")
+        if ! service postgresql status >/dev/null 2>&1; then
+            log_info "Starting PostgreSQL..."
+            service postgresql start 2>/dev/null || true
+            POSTGRES_STARTED=1
+            # Wait for PostgreSQL to be ready
+            max_wait=30
+            waited=0
+            while ! service postgresql status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
+                sleep 1
+                waited=$((waited + 1))
+                if [ $((waited % 5)) -eq 0 ]; then
+                    log_info "Waiting for PostgreSQL... ($waited/$max_wait)"
+                fi
+            done
+            if service postgresql status >/dev/null 2>&1; then
+                log_info "PostgreSQL started successfully"
+            else
+                log_warn "PostgreSQL may not have started properly"
+            fi
+        else
+            log_info "PostgreSQL is already running"
+        fi
+        ;;
+    "$DB_TYPE_MYSQL")
+        if ! service mysql-server status >/dev/null 2>&1; then
+            log_info "Starting MySQL..."
+            service mysql-server start 2>/dev/null || true
+            MYSQL_STARTED=1
+            # Wait for MySQL to be ready
+            max_wait=30
+            waited=0
+            while ! service mysql-server status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
+                sleep 1
+                waited=$((waited + 1))
+                if [ $((waited % 5)) -eq 0 ]; then
+                    log_info "Waiting for MySQL... ($waited/$max_wait)"
+                fi
+            done
+            if service mysql-server status >/dev/null 2>&1; then
+                log_info "MySQL started successfully"
+            else
+                log_warn "MySQL may not have started properly"
+            fi
+        else
+            log_info "MySQL is already running"
+        fi
+        ;;
+    *)
+        log_info "No database service to start"
+        ;;
+esac
+log_step_end "Ensuring database service is running"
+
 # Put Nextcloud in maintenance mode
 log_step_start "Enabling Nextcloud maintenance mode"
 if su -m www -c "php /usr/local/www/nextcloud/occ maintenance:mode --on" 2>/dev/null; then
@@ -163,110 +302,11 @@ fi
 log_step_end "Checking ALLOW_INSECURE_ACCESS state"
 log_step_end "Backing up SSL certificates and detecting SSL state"
 
-# Detect database type using multiple methods for reliability
-log_step_start "Detecting and backing up database"
-
-# Function to detect database type from Nextcloud config
-detect_db_from_nextcloud_config() {
-    if [ -f /usr/local/www/nextcloud/config/config.php ]; then
-        # Extract dbtype from config.php (handle both single and double quotes)
-        NC_DBTYPE=$(grep "dbtype" /usr/local/www/nextcloud/config/config.php 2>/dev/null | sed "s/.*=> *[\"']\([^\"']*\)[\"'].*/\1/" | head -1)
-        case "$NC_DBTYPE" in
-            pgsql)
-                echo "$DB_TYPE_POSTGRESQL"
-                return 0
-                ;;
-            mysql)
-                echo "$DB_TYPE_MYSQL"
-                return 0
-                ;;
-        esac
-    fi
-    return 1
-}
-
-# Function to detect database type from rc.conf (enabled services)
-detect_db_from_rcconf() {
-    if [ -f /etc/rc.conf ]; then
-        if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
-            echo "$DB_TYPE_POSTGRESQL"
-            return 0
-        elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
-            echo "$DB_TYPE_MYSQL"
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# Function to detect database type from running services
-detect_db_from_running_services() {
-    if service postgresql status >/dev/null 2>&1; then
-        echo "$DB_TYPE_POSTGRESQL"
-        return 0
-    elif service mysql-server status >/dev/null 2>&1; then
-        echo "$DB_TYPE_MYSQL"
-        return 0
-    fi
-    return 1
-}
-
-# Try detection methods in order of reliability
-DETECTED_DB_TYPE=""
-# Track whether we started a DB service for the backup so we can stop it afterwards
-POSTGRES_STARTED=0
-MYSQL_STARTED=0
-
-# Method 1: Check Nextcloud configuration (most reliable)
-log_info "Checking Nextcloud config for database type..."
-if DETECTED_DB_TYPE=$(detect_db_from_nextcloud_config); then
-    log_info "Database type detected from Nextcloud config: $DETECTED_DB_TYPE"
-fi
-
-# Method 2: Check rc.conf for enabled services
-if [ -z "$DETECTED_DB_TYPE" ]; then
-    log_info "Checking rc.conf for database type..."
-    if DETECTED_DB_TYPE=$(detect_db_from_rcconf); then
-        log_info "Database type detected from rc.conf: $DETECTED_DB_TYPE"
-    fi
-fi
-
-# Method 3: Check running services
-if [ -z "$DETECTED_DB_TYPE" ]; then
-    log_info "Checking running services for database type..."
-    if DETECTED_DB_TYPE=$(detect_db_from_running_services); then
-        log_info "Database type detected from running services: $DETECTED_DB_TYPE"
-    fi
-fi
-
-# Default to none if no database detected
-if [ -z "$DETECTED_DB_TYPE" ]; then
-    DETECTED_DB_TYPE="$DB_TYPE_NONE"
-    log_info "No database detected (fresh install?)"
-fi
-
-# Perform backup based on detected database type
+# Perform database backup
 log_step_start "Performing database backup"
 case "$DETECTED_DB_TYPE" in
     "$DB_TYPE_POSTGRESQL")
         log_info "PostgreSQL detected, creating backup..."
-        # Start PostgreSQL if not running (needed for backup)
-        if ! service postgresql status >/dev/null 2>&1; then
-            log_info "Starting PostgreSQL for backup..."
-            service postgresql start 2>/dev/null || true
-            POSTGRES_STARTED=1
-            # Wait for PostgreSQL to be ready
-            max_wait=30
-            waited=0
-            while ! service postgresql status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
-                sleep 1
-                waited=$((waited + 1))
-                # Log only every 5 seconds to reduce log noise
-                if [ $((waited % 5)) -eq 0 ]; then
-                    log_info "Waiting for PostgreSQL... ($waited/$max_wait)"
-                fi
-            done
-        fi
         if [ -n "$DB_PASS" ]; then
             log_info "Running pg_dump..."
             PGPASSWORD="$DB_PASS" pg_dump -U "$DB_USER" -h localhost "$DB_NAME" > "$BACKUP_DIR/nextcloud_pg.sql" 2>/dev/null || true
@@ -282,23 +322,6 @@ case "$DETECTED_DB_TYPE" in
         ;;
     "$DB_TYPE_MYSQL")
         log_info "MySQL detected, creating backup..."
-        # Start MySQL if not running (needed for backup)
-        if ! service mysql-server status >/dev/null 2>&1; then
-            log_info "Starting MySQL for backup..."
-            service mysql-server start 2>/dev/null || true
-            MYSQL_STARTED=1
-            # Wait for MySQL to be ready
-            max_wait=30
-            waited=0
-            while ! service mysql-server status >/dev/null 2>&1 && [ $waited -lt $max_wait ]; do
-                sleep 1
-                waited=$((waited + 1))
-                # Log only every 5 seconds to reduce log noise
-                if [ $((waited % 5)) -eq 0 ]; then
-                    log_info "Waiting for MySQL... ($waited/$max_wait)"
-                fi
-            done
-        fi
         if [ -n "$DB_PASS" ]; then
             log_info "Running mysqldump..."
             MYSQL_PWD="$DB_PASS" mysqldump -u "$DB_USER" \
@@ -321,43 +344,9 @@ case "$DETECTED_DB_TYPE" in
         log_info "No database to backup"
         ;;
 esac
-log_step_end "Performing database backup"
-
-# After a successful backup, stop the database server(s) we started for the backup.
-# We only stop the service if:
-#  - we started it in this script (POSTGRES_STARTED or MYSQL_STARTED is set), and
-#  - the backup file exists and is non-empty (indicating a successful backup).
-log_step_start "Stopping database services started for backup"
-if [ "$POSTGRES_STARTED" = "1" ]; then
-    if [ -s "$BACKUP_DIR/nextcloud_pg.sql" ]; then
-        log_info "Stopping PostgreSQL (was started for backup)..."
-        if service postgresql stop >/dev/null 2>&1; then
-            log_info "PostgreSQL stopped"
-        else
-            log_warn "Failed to stop PostgreSQL"
-        fi
-    else
-        log_warn "PostgreSQL was started for backup but backup file not found or empty; not stopping PostgreSQL"
-    fi
-fi
-
-if [ "$MYSQL_STARTED" = "1" ]; then
-    if [ -s "$BACKUP_DIR/nextcloud_mysql.sql" ]; then
-        log_info "Stopping MySQL (was started for backup)..."
-        if service mysql-server stop >/dev/null 2>&1; then
-            log_info "MySQL stopped"
-        else
-            log_warn "Failed to stop MySQL"
-        fi
-    else
-        log_warn "MySQL was started for backup but backup file not found or empty; not stopping MySQL"
-    fi
-fi
-log_step_end "Stopping database services started for backup"
-
 echo "$DETECTED_DB_TYPE" > "$BACKUP_DIR/database_type.txt"
 log_info "Database type saved: $DETECTED_DB_TYPE"
-log_step_end "Detecting and backing up database"
+log_step_end "Performing database backup"
 
 # Save current migration state
 log_step_start "Saving migration state"
