@@ -428,7 +428,7 @@ if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
     
     # Install PostgreSQL if not already installed
     log_info "Installing PostgreSQL..."
-    if pkg install -y postgresql18-server postgresql18-client >/dev/null 2>&1; then
+    if pkg install -y postgresql17-server postgresql17-client >/dev/null 2>&1; then
         log_info "PostgreSQL installed successfully"
     else
         log_warn "PostgreSQL may already be installed or installation failed"
