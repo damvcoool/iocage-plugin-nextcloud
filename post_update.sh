@@ -239,6 +239,42 @@ fi
 start_or_restart_service "nginx"
 log_step_end "Starting/Restarting services"
 
+# Wait for the database to be ready before running occ commands
+log_step_start "Waiting for database to be ready"
+max_attempts=30
+attempt=0
+
+if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+    log_info "Checking PostgreSQL readiness..."
+    until su -m postgres -c "psql -c 'SELECT 1' >/dev/null 2>&1" || [ $attempt -eq $max_attempts ]
+    do
+        attempt=$((attempt + 1))
+        log_info "PostgreSQL is unavailable - attempt $attempt of $max_attempts"
+        sleep 2
+    done
+    if [ $attempt -lt $max_attempts ]; then
+        log_info "PostgreSQL is ready"
+    else
+        log_warn "PostgreSQL did not become ready in time - occ commands may fail"
+    fi
+elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+    log_info "Checking MySQL readiness..."
+    until mysqladmin ping >/dev/null 2>&1 || [ $attempt -eq $max_attempts ]
+    do
+        attempt=$((attempt + 1))
+        log_info "MySQL is unavailable - attempt $attempt of $max_attempts"
+        sleep 2
+    done
+    if [ $attempt -lt $max_attempts ]; then
+        log_info "MySQL is ready"
+    else
+        log_warn "MySQL did not become ready in time - occ commands may fail"
+    fi
+else
+    log_info "No database service detected in rc.conf"
+fi
+log_step_end "Waiting for database to be ready"
+
 # Run Nextcloud upgrade if needed
 log_step_start "Running Nextcloud upgrade"
 log_info "Executing: occ upgrade"
