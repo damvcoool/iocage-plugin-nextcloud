@@ -36,104 +36,22 @@ if [ -n "$PRE_UPDATE_BACKUP" ] && [ -f "$PRE_UPDATE_BACKUP/database_type.txt" ];
     log_info "Previous database type from backup: $PREVIOUS_DB_TYPE"
 fi
 
-# Function to check if PostgreSQL has Nextcloud tables (indicating data exists)
+# Function to check if PostgreSQL has Nextcloud data by checking multiple core tables
+# This is more robust than checking a single table in case of partial migrations
 pg_has_nextcloud_data() {
+    # Check for oc_users table as it's a core Nextcloud table that must exist
+    # Also check for oc_appconfig which stores app configuration
     if su -m postgres -c "psql -d nextcloud -c \"SELECT 1 FROM oc_users LIMIT 1\"" >/dev/null 2>&1; then
+        return 0
+    fi
+    if su -m postgres -c "psql -d nextcloud -c \"SELECT 1 FROM oc_appconfig LIMIT 1\"" >/dev/null 2>&1; then
         return 0
     fi
     return 1
 }
 
-# If the previous database was MySQL, we need to inform the user about data migration
-# even if PostgreSQL is now running (Migration 1 may have started it)
-if [ "$PREVIOUS_DB_TYPE" = "mysql" ]; then
-    log_info "Detected upgrade from MySQL installation"
-    
-    # Check if PostgreSQL already has data (migration was already done manually)
-    if service postgresql status >/dev/null 2>&1; then
-        if pg_has_nextcloud_data; then
-            log_info "PostgreSQL already has Nextcloud data, migration appears complete"
-            log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - data already migrated"
-            exit 0
-        else
-            # PostgreSQL is running but has no data - need to inform user about data migration
-            log_info "PostgreSQL is running but database is empty - data migration required"
-            # Fall through to show migration instructions
-        fi
-    else
-        # PostgreSQL not running, but previous DB was MySQL - initialize PostgreSQL
-        log_info "PostgreSQL not running, initializing for MySQL migration..."
-        
-        # Check if PostgreSQL is already initialized
-        if [ ! -d /var/db/postgres/data18 ]; then
-            log_info "Setting PostgreSQL init flags..."
-            sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
-            log_info "Running PostgreSQL initdb..."
-            /usr/local/etc/rc.d/postgresql oneinitdb
-        fi
-        
-        sysrc -f /etc/rc.conf postgresql_enable="YES"
-        log_info "Starting PostgreSQL service..."
-        service postgresql start 2>/dev/null || true
-        # Fall through to show migration instructions
-    fi
-    
-    # Show migration instructions for MySQL users
-    log_info "MySQL backup should be available in the pre_update backup"
-else
-    # Not a MySQL migration - check other conditions
-    
-    # Check if we're already on PostgreSQL with data
-    log_info "Checking if PostgreSQL is already running..."
-    if service postgresql status >/dev/null 2>&1; then
-        if pg_has_nextcloud_data; then
-            log_info "PostgreSQL already running with data, skipping migration"
-            log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - already on PostgreSQL"
-            exit 0
-        fi
-        # PostgreSQL running but empty - this is a fresh install, nothing to migrate
-        log_info "PostgreSQL running (fresh install), no migration needed"
-        log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - fresh PostgreSQL install"
-        exit 0
-    fi
-
-    # Check if PostgreSQL data directory exists (already initialized)
-    log_info "Checking if PostgreSQL is already initialized..."
-    if [ -d /var/db/postgres/data18 ]; then
-        log_info "PostgreSQL already initialized, starting service"
-        sysrc -f /etc/rc.conf postgresql_enable="YES"
-        log_info "Starting PostgreSQL service..."
-        service postgresql start 2>/dev/null || true
-        log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - already initialized"
-        exit 0
-    fi
-
-    # Check if MySQL is running and has data
-    log_info "Checking if MySQL is running..."
-    if ! service mysql-server status >/dev/null 2>&1; then
-        log_info "MySQL not running - this appears to be a fresh install"
-        log_info "Initializing PostgreSQL for new installation..."
-        
-        # Initialize and start PostgreSQL for fresh installs
-        # Set authentication options to suppress initdb warning about "trust" authentication
-        log_info "Setting PostgreSQL init flags..."
-        sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
-        log_info "Running PostgreSQL initdb..."
-        /usr/local/etc/rc.d/postgresql oneinitdb
-        sysrc -f /etc/rc.conf postgresql_enable="YES"
-        log_info "Starting PostgreSQL service..."
-        service postgresql start
-        
-        log_info "PostgreSQL initialized successfully"
-        log_step_end "Migration 2: MySQL to PostgreSQL 18" "completed - fresh install"
-        exit 0
-    fi
-    
-    log_info "MySQL is running with existing data"
-fi
-# Show appropriate message based on whether this is a MySQL migration
-if [ "$PREVIOUS_DB_TYPE" = "mysql" ]; then
-    # User was on MySQL - show message about data migration being needed
+# Function to display MySQL to PostgreSQL migration instructions
+show_mysql_migration_instructions() {
     echo ""
     echo "========================================"
     echo "IMPORTANT: MySQL to PostgreSQL Migration"
@@ -160,10 +78,10 @@ if [ "$PREVIOUS_DB_TYPE" = "mysql" ]; then
     echo "See /root/migrate_mysql_to_postgresql.sh for more details."
     echo "========================================"
     echo ""
-    
-    log_step_end "Migration 2: MySQL to PostgreSQL 18" "data migration required"
-else
-    # MySQL was still running (not a pre_update scenario) - prompt for migration script
+}
+
+# Function to display live MySQL migration prompt
+show_live_mysql_migration_prompt() {
     echo ""
     echo "========================================"
     echo "IMPORTANT: MySQL to PostgreSQL Migration Required"
@@ -185,8 +103,95 @@ else
     echo "Manual migration required to ensure data integrity."
     echo "========================================"
     echo ""
+}
 
-    log_step_end "Migration 2: MySQL to PostgreSQL 18" "manual migration required"
+# Handle MySQL to PostgreSQL migration scenarios
+if [ "$PREVIOUS_DB_TYPE" = "mysql" ]; then
+    log_info "Detected upgrade from MySQL installation"
+    
+    # Check if PostgreSQL already has data (migration was already done manually)
+    if service postgresql status >/dev/null 2>&1; then
+        if pg_has_nextcloud_data; then
+            log_info "PostgreSQL already has Nextcloud data, migration appears complete"
+            log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - data already migrated"
+            exit 0
+        fi
+        # PostgreSQL is running but has no data - need to inform user about data migration
+        log_info "PostgreSQL is running but database is empty - data migration required"
+    else
+        # PostgreSQL not running, but previous DB was MySQL - initialize PostgreSQL
+        log_info "PostgreSQL not running, initializing for MySQL migration..."
+        
+        # Check if PostgreSQL is already initialized
+        if [ ! -d /var/db/postgres/data18 ]; then
+            log_info "Setting PostgreSQL init flags..."
+            sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
+            log_info "Running PostgreSQL initdb..."
+            /usr/local/etc/rc.d/postgresql oneinitdb
+        fi
+        
+        sysrc -f /etc/rc.conf postgresql_enable="YES"
+        log_info "Starting PostgreSQL service..."
+        service postgresql start 2>/dev/null || true
+    fi
+    
+    # Show migration instructions for MySQL users and exit
+    log_info "MySQL backup should be available in the pre_update backup"
+    show_mysql_migration_instructions
+    log_step_end "Migration 2: MySQL to PostgreSQL 18" "data migration required"
+    exit 0
 fi
 
+# Not a MySQL migration from pre_update - check other conditions
+
+# Check if we're already on PostgreSQL with data
+log_info "Checking if PostgreSQL is already running..."
+if service postgresql status >/dev/null 2>&1; then
+    if pg_has_nextcloud_data; then
+        log_info "PostgreSQL already running with data, skipping migration"
+        log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - already on PostgreSQL"
+        exit 0
+    fi
+    # PostgreSQL running but empty - this is a fresh install, nothing to migrate
+    log_info "PostgreSQL running (fresh install), no migration needed"
+    log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - fresh PostgreSQL install"
+    exit 0
+fi
+
+# Check if PostgreSQL data directory exists (already initialized)
+log_info "Checking if PostgreSQL is already initialized..."
+if [ -d /var/db/postgres/data18 ]; then
+    log_info "PostgreSQL already initialized, starting service"
+    sysrc -f /etc/rc.conf postgresql_enable="YES"
+    log_info "Starting PostgreSQL service..."
+    service postgresql start 2>/dev/null || true
+    log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - already initialized"
+    exit 0
+fi
+
+# Check if MySQL is running and has data (live MySQL scenario without pre_update)
+log_info "Checking if MySQL is running..."
+if ! service mysql-server status >/dev/null 2>&1; then
+    log_info "MySQL not running - this appears to be a fresh install"
+    log_info "Initializing PostgreSQL for new installation..."
+    
+    # Initialize and start PostgreSQL for fresh installs
+    # Set authentication options to suppress initdb warning about "trust" authentication
+    log_info "Setting PostgreSQL init flags..."
+    sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
+    log_info "Running PostgreSQL initdb..."
+    /usr/local/etc/rc.d/postgresql oneinitdb
+    sysrc -f /etc/rc.conf postgresql_enable="YES"
+    log_info "Starting PostgreSQL service..."
+    service postgresql start
+    
+    log_info "PostgreSQL initialized successfully"
+    log_step_end "Migration 2: MySQL to PostgreSQL 18" "completed - fresh install"
+    exit 0
+fi
+
+# MySQL is running with existing data (live MySQL scenario)
+log_info "MySQL is running with existing data"
+show_live_mysql_migration_prompt
+log_step_end "Migration 2: MySQL to PostgreSQL 18" "manual migration required"
 exit 0
