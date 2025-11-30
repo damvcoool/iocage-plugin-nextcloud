@@ -139,10 +139,6 @@ su -m postgres -c "psql -c \"CREATE USER ${USER} WITH PASSWORD '${PASS}';\""
 su -m postgres -c "psql -c \"CREATE DATABASE ${DB} OWNER ${USER} ENCODING 'UTF8' TEMPLATE template0;\""
 su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE ${DB} TO ${USER};\""
 
-# Make the default log directory
-mkdir -p /var/log/zm
-chown www:www /var/log/zm
-
 # Make the default nextcloud data directory
 NCDATA_DIR=/usr/local/nextcloud/data
 mkdir -p $NCDATA_DIR

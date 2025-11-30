@@ -285,15 +285,13 @@ if [ "$SSL_STATE" = "none" ]; then
     fi
 fi
 
-# Backup SSL certificates
-log_step_start "Backing up SSL certificates"
+# Backup SSL certificates (actual file copy)
 if [ -d /usr/local/etc/letsencrypt ]; then
     cp -r /usr/local/etc/letsencrypt "$BACKUP_DIR/letsencrypt"
     log_info "SSL certificates backed up to: $BACKUP_DIR/letsencrypt"
 else
     log_info "No SSL certificates found"
 fi
-log_step_end "Backing up SSL certificates"
 
 # Save ALLOW_INSECURE_ACCESS state if it was explicitly set
 log_step_start "Checking ALLOW_INSECURE_ACCESS state"

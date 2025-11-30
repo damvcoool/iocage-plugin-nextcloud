@@ -1,7 +1,7 @@
 [nextcloud]
 backend = auto
 enabled = true
-port = port = 0:65535
+port = 0:65535
 protocol = tcp
 filter = nextcloud
 maxretry = 3
