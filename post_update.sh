@@ -164,10 +164,37 @@ if [ -n "$PRE_UPDATE_BACKUP" ] && [ -d "$PRE_UPDATE_BACKUP" ]; then
         log_info "Previous SSL state: $SSL_STATE"
     fi
 
+    # Read URL scheme from pre_update backup (more reliable than SSL_STATE for determining HTTP vs HTTPS)
+    NC_URL_SCHEME="https"
+    if [ -f "$PRE_UPDATE_BACKUP/nc_url_scheme.txt" ]; then
+        NC_URL_SCHEME=$(cat "$PRE_UPDATE_BACKUP/nc_url_scheme.txt")
+        log_info "Previous URL scheme: $NC_URL_SCHEME"
+    fi
+
     # Restore jail_options.env if it existed (preserves ALLOW_INSECURE_ACCESS setting)
     if [ -f "$PRE_UPDATE_BACKUP/jail_options.env" ]; then
         cp "$PRE_UPDATE_BACKUP/jail_options.env" /root/jail_options.env
         log_info "Restored jail_options.env"
+    fi
+
+    # If the previous URL scheme was HTTP, ensure ALLOW_INSECURE_ACCESS is set
+    # This is more reliable than SSL_STATE because it reflects what Nextcloud was actually using
+    if [ "$NC_URL_SCHEME" = "http" ]; then
+        log_info "Previous configuration used HTTP, ensuring ALLOW_INSECURE_ACCESS=true"
+        if [ ! -f /root/jail_options.env ]; then
+            echo "ALLOW_INSECURE_ACCESS=true" > /root/jail_options.env
+            log_info "Created jail_options.env with ALLOW_INSECURE_ACCESS=true"
+        elif grep -q "ALLOW_INSECURE_ACCESS=true" /root/jail_options.env; then
+            log_info "ALLOW_INSECURE_ACCESS=true already set"
+        elif grep -q "ALLOW_INSECURE_ACCESS" /root/jail_options.env; then
+            # Update existing value (may be set to false or other value)
+            sed -i '' 's/ALLOW_INSECURE_ACCESS=.*/ALLOW_INSECURE_ACCESS=true/' /root/jail_options.env 2>/dev/null || \
+            sed -i 's/ALLOW_INSECURE_ACCESS=.*/ALLOW_INSECURE_ACCESS=true/' /root/jail_options.env
+            log_info "Updated ALLOW_INSECURE_ACCESS to true in jail_options.env"
+        else
+            echo "ALLOW_INSECURE_ACCESS=true" >> /root/jail_options.env
+            log_info "Added ALLOW_INSECURE_ACCESS=true to jail_options.env"
+        fi
     fi
 
     # Restore SSL certificates based on previous state
@@ -344,6 +371,54 @@ else
     log_info "No database service detected in rc.conf"
 fi
 log_step_end "Waiting for database to be ready"
+
+# Fix installed flag if it was incorrectly set to false
+# This can happen if a MySQL to PostgreSQL migration was started but the data already exists
+log_step_start "Verifying Nextcloud installation state"
+NC_CONFIG_FILE="/usr/local/www/nextcloud/config/config.php"
+if [ -f "$NC_CONFIG_FILE" ]; then
+    # Check if installed is set to false in config.php
+    NC_INSTALLED=$(php -r 'include "'"$NC_CONFIG_FILE"'"; echo isset($CONFIG["installed"]) ? ($CONFIG["installed"] ? "true" : "false") : "unset";' 2>/dev/null || echo "error")
+    
+    if [ "$NC_INSTALLED" = "false" ]; then
+        log_info "Detected installed=false in config.php, checking if this is valid..."
+        
+        # Check if the Nextcloud database has tables (indicating it was actually installed)
+        DB_HAS_DATA=0
+        if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+            # Check if oc_users table exists in PostgreSQL
+            if su -m postgres -c "psql -d nextcloud -c \"SELECT 1 FROM oc_users LIMIT 1\"" >/dev/null 2>&1; then
+                DB_HAS_DATA=1
+            fi
+        elif grep -q 'mysql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+            # Check if oc_users table exists in MySQL
+            if mysql -u dbadmin -p"$(cat /root/dbpassword 2>/dev/null)" nextcloud -e "SELECT 1 FROM oc_users LIMIT 1" >/dev/null 2>&1; then
+                DB_HAS_DATA=1
+            fi
+        fi
+        
+        if [ "$DB_HAS_DATA" = "1" ]; then
+            log_info "Database has existing data, setting installed=true in config.php..."
+            # Use PHP to safely update the config file
+            php -r '
+$configFile = "'"$NC_CONFIG_FILE"'";
+include $configFile;
+$config = $CONFIG;
+$config["installed"] = true;
+$content = "<?php\n\$CONFIG = " . var_export($config, true) . ";\n";
+file_put_contents($configFile, $content);
+echo "Config updated: installed=true";
+' 2>/dev/null && log_info "Successfully set installed=true" || log_warn "Failed to update installed flag"
+        else
+            log_info "Database appears empty, keeping installed=false (fresh installation needed)"
+        fi
+    else
+        log_info "Installation state is correct (installed=$NC_INSTALLED)"
+    fi
+else
+    log_warn "Nextcloud config.php not found at $NC_CONFIG_FILE"
+fi
+log_step_end "Verifying Nextcloud installation state"
 
 # Run Nextcloud upgrade if needed
 log_step_start "Running Nextcloud upgrade"
