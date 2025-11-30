@@ -351,12 +351,6 @@ log_info "Executing: occ upgrade"
 su -m www -c "php /usr/local/www/nextcloud/occ upgrade" 2>/dev/null || true
 log_step_end "Running Nextcloud upgrade"
 
-# Verify and repair Nextcloud data
-log_step_start "Verifying and repairing Nextcloud data"
-log_info "Executing: occ maintenance:repair"
-su -m www -c "php /usr/local/www/nextcloud/occ maintenance:repair" 2>/dev/null || true
-log_step_end "Verifying and repairing Nextcloud data"
-
 # Add missing database indices and columns
 log_step_start "Adding missing database indices and columns"
 log_info "Executing: occ db:add-missing-indices"
