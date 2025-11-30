@@ -19,6 +19,17 @@ if [ -f /usr/local/bin/load_env ]; then
     . /usr/local/bin/load_env
 fi
 
+# Helper function to manage PHP-FPM service (handles both service names)
+php_fpm_service() {
+    action="$1"
+    if service php_fpm "$action" 2>/dev/null; then
+        return 0
+    elif service php-fpm "$action" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 # Get database credentials
 DB_USER=$(cat /root/dbuser 2>/dev/null || echo "dbadmin")
 DB_PASS=$(cat /root/dbpassword 2>/dev/null || echo "")
@@ -118,7 +129,7 @@ read dummy
 echo ""
 echo "Stopping web services..."
 service nginx stop 2>/dev/null || true
-service php_fpm stop 2>/dev/null || service php-fpm stop 2>/dev/null || true
+php_fpm_service stop || true
 
 # Ensure PostgreSQL database exists and is empty
 echo ""
@@ -139,133 +150,99 @@ su -m postgres -c "psql -d $DB_NAME -c \"GRANT ALL ON SCHEMA public TO $DB_USER;
 
 echo "PostgreSQL database prepared."
 
-# Migrate data using pgloader if available
-if [ "$PGLOADER_AVAILABLE" = "1" ]; then
-    echo ""
-    echo "Migrating data using pgloader..."
-    echo "This may take a while depending on database size..."
-    
-    # Create a pgloader command file for loading from SQL file
-    # pgloader can load from MySQL dump files with some limitations
-    PGLOADER_CMD="/tmp/pgloader_migration.load"
-    cat > "$PGLOADER_CMD" << EOF
-LOAD DATABASE
-    FROM mysql://$DB_USER:$DB_PASS@localhost/$DB_NAME
-    INTO pgsql://$DB_USER:$DB_PASS@localhost/$DB_NAME
+# Attempt to convert and import MySQL dump to PostgreSQL
+# Note: This uses basic sed transformations since MySQL is no longer available
+# For complex databases, using pgloader with a temporary MySQL instance is recommended
+echo ""
+echo "Converting MySQL dump to PostgreSQL format..."
+echo "This may take a while depending on database size..."
 
-WITH include drop, create tables, create indexes, reset sequences,
-     workers = 4, concurrency = 1,
-     multiple readers per thread, rows per range = 50000
+# Create a temporary converted SQL file
+CONVERTED_SQL="/tmp/nextcloud_pg_converted.sql"
 
-SET maintenance_work_mem to '128MB',
-    work_mem to '12MB',
-    search_path to 'public'
+# Basic MySQL to PostgreSQL conversion
+# This handles common differences but may not cover all cases
+cat "$MYSQL_BACKUP" | \
+    sed 's/`//g' | \
+    sed 's/ENGINE=InnoDB[^;]*//gi' | \
+    sed 's/ENGINE=MyISAM[^;]*//gi' | \
+    sed 's/DEFAULT CHARSET=[a-zA-Z0-9_]*//gi' | \
+    sed 's/COLLATE=[a-zA-Z0-9_]*//gi' | \
+    sed 's/AUTO_INCREMENT=[0-9]*//gi' | \
+    sed 's/AUTO_INCREMENT/SERIAL/gi' | \
+    sed 's/UNSIGNED//gi' | \
+    sed 's/\\'\''/'\'\''/g' | \
+    sed 's/TINYINT(1)/BOOLEAN/gi' | \
+    sed 's/TINYINT([0-9]*)/SMALLINT/gi' | \
+    sed 's/MEDIUMINT([0-9]*)/INTEGER/gi' | \
+    sed 's/INT([0-9]*)/INTEGER/gi' | \
+    sed 's/BIGINT([0-9]*)/BIGINT/gi' | \
+    sed 's/DOUBLE/DOUBLE PRECISION/gi' | \
+    sed 's/FLOAT([0-9,]*)/REAL/gi' | \
+    sed 's/DATETIME/TIMESTAMP/gi' | \
+    sed 's/LONGTEXT/TEXT/gi' | \
+    sed 's/MEDIUMTEXT/TEXT/gi' | \
+    sed 's/TINYTEXT/TEXT/gi' | \
+    sed 's/LONGBLOB/BYTEA/gi' | \
+    sed 's/MEDIUMBLOB/BYTEA/gi' | \
+    sed 's/TINYBLOB/BYTEA/gi' | \
+    sed 's/BLOB/BYTEA/gi' | \
+    sed 's/VARBINARY([0-9]*)/BYTEA/gi' | \
+    sed 's/BINARY([0-9]*)/BYTEA/gi' | \
+    sed '/^\/\*!.*\*\/;$/d' | \
+    sed '/^SET /d' | \
+    sed '/^LOCK TABLES/d' | \
+    sed '/^UNLOCK TABLES/d' | \
+    sed '/^--/d' | \
+    grep -v "^$" > "$CONVERTED_SQL" || true
 
-CAST type datetime to timestamptz
-                drop default drop not null using zero-dates-to-null,
-     type date drop not null drop default using zero-dates-to-null
-
-BEFORE LOAD DO
-     \$\$ DROP SCHEMA IF EXISTS public CASCADE; \$\$,
-     \$\$ CREATE SCHEMA public; \$\$;
-EOF
-
-    echo ""
-    echo "NOTE: pgloader works best with a LIVE MySQL connection."
-    echo "Since MySQL is no longer available, we'll use an alternative approach."
-    echo ""
+IMPORT_SUCCESS=0
+if [ -s "$CONVERTED_SQL" ]; then
+    echo "Importing converted SQL into PostgreSQL..."
     
-    # For SQL file import, we need a different approach
-    # We'll use a combination of tools or manual conversion
-    
-    echo "Converting MySQL dump to PostgreSQL format..."
-    
-    # Create a temporary converted SQL file
-    CONVERTED_SQL="/tmp/nextcloud_pg_converted.sql"
-    
-    # Basic MySQL to PostgreSQL conversion
-    # This handles common differences but may not cover all cases
-    cat "$MYSQL_BACKUP" | \
-        sed 's/`//g' | \
-        sed 's/ENGINE=InnoDB[^;]*//gi' | \
-        sed 's/ENGINE=MyISAM[^;]*//gi' | \
-        sed 's/DEFAULT CHARSET=[a-zA-Z0-9_]*//gi' | \
-        sed 's/COLLATE=[a-zA-Z0-9_]*//gi' | \
-        sed 's/AUTO_INCREMENT=[0-9]*//gi' | \
-        sed 's/AUTO_INCREMENT/SERIAL/gi' | \
-        sed 's/UNSIGNED//gi' | \
-        sed 's/\\'\''/'\'\''/g' | \
-        sed 's/\\"/"/g' | \
-        sed 's/TINYINT(1)/BOOLEAN/gi' | \
-        sed 's/TINYINT([0-9]*)/SMALLINT/gi' | \
-        sed 's/MEDIUMINT([0-9]*)/INTEGER/gi' | \
-        sed 's/INT([0-9]*)/INTEGER/gi' | \
-        sed 's/BIGINT([0-9]*)/BIGINT/gi' | \
-        sed 's/DOUBLE/DOUBLE PRECISION/gi' | \
-        sed 's/FLOAT([0-9,]*)/REAL/gi' | \
-        sed 's/DATETIME/TIMESTAMP/gi' | \
-        sed 's/LONGTEXT/TEXT/gi' | \
-        sed 's/MEDIUMTEXT/TEXT/gi' | \
-        sed 's/TINYTEXT/TEXT/gi' | \
-        sed 's/LONGBLOB/BYTEA/gi' | \
-        sed 's/MEDIUMBLOB/BYTEA/gi' | \
-        sed 's/TINYBLOB/BYTEA/gi' | \
-        sed 's/BLOB/BYTEA/gi' | \
-        sed 's/VARBINARY([0-9]*)/BYTEA/gi' | \
-        sed 's/BINARY([0-9]*)/BYTEA/gi' | \
-        sed '/^\/\*!.*\*\/;$/d' | \
-        sed '/^SET /d' | \
-        sed '/^LOCK TABLES/d' | \
-        sed '/^UNLOCK TABLES/d' | \
-        sed '/^--/d' | \
-        grep -v "^$" > "$CONVERTED_SQL" || true
-    
-    if [ -s "$CONVERTED_SQL" ]; then
-        echo "Importing converted SQL into PostgreSQL..."
-        
-        # Import the converted SQL
-        if PGPASSWORD="$DB_PASS" psql -U "$DB_USER" -h localhost -d "$DB_NAME" -f "$CONVERTED_SQL" 2>/tmp/pg_import_errors.log; then
-            echo "Import completed."
-            # Check if there were errors
-            if [ -s /tmp/pg_import_errors.log ]; then
-                echo "Some warnings/errors occurred during import:"
-                head -20 /tmp/pg_import_errors.log
-                echo "..."
-                echo "Full log at: /tmp/pg_import_errors.log"
-            fi
-        else
-            echo "WARNING: Import had errors. Check /tmp/pg_import_errors.log"
-            echo ""
-            echo "The automatic SQL conversion may not handle all MySQL-specific syntax."
-            echo "Manual intervention may be required."
+    # Import the converted SQL
+    if PGPASSWORD="$DB_PASS" psql -U "$DB_USER" -h localhost -d "$DB_NAME" -f "$CONVERTED_SQL" 2>/tmp/pg_import_errors.log; then
+        echo "Import completed."
+        IMPORT_SUCCESS=1
+        # Check if there were errors
+        if [ -s /tmp/pg_import_errors.log ]; then
+            echo "Some warnings/errors occurred during import:"
+            head -20 /tmp/pg_import_errors.log
+            echo "..."
+            echo "Full log at: /tmp/pg_import_errors.log"
         fi
-        
-        rm -f "$CONVERTED_SQL"
     else
-        echo "WARNING: SQL conversion produced empty output."
-        echo "Manual migration may be required."
+        echo "WARNING: Import had errors. Check /tmp/pg_import_errors.log"
+        echo ""
+        echo "The automatic SQL conversion may not handle all MySQL-specific syntax."
     fi
     
-    rm -f "$PGLOADER_CMD"
+    rm -f "$CONVERTED_SQL"
 else
+    echo "WARNING: SQL conversion produced empty output."
+fi
+
+# If automatic import failed, provide guidance
+if [ "$IMPORT_SUCCESS" = "0" ]; then
     echo ""
     echo "========================================"
-    echo "MANUAL MIGRATION REQUIRED"
+    echo "MANUAL MIGRATION MAY BE REQUIRED"
     echo "========================================"
     echo ""
-    echo "pgloader is not installed. For the best migration experience, install it:"
-    echo "  pkg install pgloader"
+    if [ "$PGLOADER_AVAILABLE" = "1" ]; then
+        echo "pgloader is installed but requires a live MySQL connection."
+    else
+        echo "For the best migration experience, install pgloader:"
+        echo "  pkg install pgloader"
+    fi
     echo ""
-    echo "Then you have two options:"
-    echo ""
-    echo "Option 1: If you have access to another machine with MySQL:"
-    echo "  1. Restore the backup to a temporary MySQL instance"
-    echo "  2. Run: pgloader mysql://$DB_USER:PASSWORD@mysql-host/$DB_NAME \\"
+    echo "To use pgloader for migration:"
+    echo "  1. Set up a temporary MySQL instance on another machine"
+    echo "  2. Restore your backup: mysql -u root < $MYSQL_BACKUP"
+    echo "  3. Run: pgloader mysql://$DB_USER:PASSWORD@mysql-host/$DB_NAME \\"
     echo "                 pgsql://$DB_USER:PASSWORD@localhost/$DB_NAME"
     echo ""
-    echo "Option 2: Use mysql2postgres or similar conversion tools"
-    echo ""
-    echo "Your MySQL backup is at: $MYSQL_BACKUP"
+    echo "Your MySQL backup is preserved at: $MYSQL_BACKUP"
     echo "========================================"
 fi
 
@@ -276,8 +253,14 @@ echo "Updating Nextcloud configuration..."
 NC_CONFIG="/usr/local/www/nextcloud/config/config.php"
 if [ -f "$NC_CONFIG" ]; then
     # Use PHP to safely update the config
+    # Pass credentials via environment variables to avoid escaping issues
+    export NC_DB_USER="$DB_USER"
+    export NC_DB_PASS="$DB_PASS"
+    export NC_DB_NAME="$DB_NAME"
+    export NC_CONFIG_PATH="$NC_CONFIG"
+    
     php -r '
-$configFile = "'"$NC_CONFIG"'";
+$configFile = getenv("NC_CONFIG_PATH");
 if (file_exists($configFile)) {
     include $configFile;
     $config = isset($CONFIG) ? $CONFIG : array();
@@ -286,9 +269,9 @@ if (file_exists($configFile)) {
     $config["dbtype"] = "pgsql";
     $config["dbhost"] = "localhost";
     $config["dbport"] = "5432";
-    $config["dbuser"] = "'"$DB_USER"'";
-    $config["dbpassword"] = "'"$DB_PASS"'";
-    $config["dbname"] = "'"$DB_NAME"'";
+    $config["dbuser"] = getenv("NC_DB_USER");
+    $config["dbpassword"] = getenv("NC_DB_PASS");
+    $config["dbname"] = getenv("NC_DB_NAME");
     
     // Remove MySQL-specific setting
     if (isset($config["mysql.utf8mb4"])) {
@@ -304,6 +287,10 @@ if (file_exists($configFile)) {
     exit(1);
 }
 '
+    
+    # Clear environment variables
+    unset NC_DB_USER NC_DB_PASS NC_DB_NAME NC_CONFIG_PATH
+    
     echo "Nextcloud config.php updated for PostgreSQL."
 else
     echo "WARNING: Nextcloud config.php not found at $NC_CONFIG"
@@ -312,7 +299,7 @@ fi
 # Start services
 echo ""
 echo "Starting services..."
-service php_fpm start 2>/dev/null || service php-fpm start 2>/dev/null || true
+php_fpm_service start || true
 service nginx start 2>/dev/null || true
 
 # Verify migration
