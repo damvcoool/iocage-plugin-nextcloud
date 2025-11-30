@@ -244,7 +244,7 @@ cat "$MYSQL_BACKUP" | \
     sed 's/int NOT NULL AUTO_INCREMENT/SERIAL/gi' | \
     sed 's/AUTO_INCREMENT/SERIAL/gi' | \
     sed 's/\\'\''/'\'\''/g' | \
-    sed 's/TINYINT(1)/BOOLEAN/gi' | \
+    sed 's/TINYINT(1)/SMALLINT/gi' | \
     sed 's/TINYINT([0-9]*)/SMALLINT/gi' | \
     sed 's/MEDIUMINT([0-9]*)/INTEGER/gi' | \
     sed 's/INT([0-9]*)/INTEGER/gi' | \
@@ -269,6 +269,10 @@ cat "$MYSQL_BACKUP" | \
     sed '/^LOCK TABLES/d' | \
     sed '/^UNLOCK TABLES/d' | \
     sed '/^--/d' | \
+    sed 's/[[:space:]]user[[:space:]]/ "user" /gi' | \
+    sed 's/,user,/,"user",/gi' | \
+    sed 's/(user,/("user",/gi' | \
+    sed 's/,user))/,"user")/gi' | \
     grep -v "^$" | \
     awk '
     {
