@@ -132,8 +132,8 @@ NEEDS_DB_CONFIG_UPDATE=0
 NC_CONFIG_FILE="/usr/local/www/nextcloud/config/config.php"
 
 if [ -f "$NC_CONFIG_FILE" ]; then
-    # Check if config.php still points to MySQL
-    NC_DBTYPE=$(grep "dbtype" "$NC_CONFIG_FILE" 2>/dev/null | sed "s/.*=> *[\"']\([^\"']*\)[\"'].*/\1/" | head -1)
+    # Check if config.php still points to MySQL using PHP for reliable parsing
+    NC_DBTYPE=$(php -r 'include "'"$NC_CONFIG_FILE"'"; echo isset($CONFIG["dbtype"]) ? $CONFIG["dbtype"] : "";' 2>/dev/null || echo "")
     if [ "$NC_DBTYPE" = "mysql" ]; then
         # Config still points to MySQL, but we're now on PostgreSQL
         if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null && ! service mysql-server status >/dev/null 2>&1; then
@@ -188,31 +188,40 @@ if [ "$NEEDS_DB_CONFIG_UPDATE" = "1" ]; then
         # Use PHP to update the config file safely (handles special characters in values properly)
         log_info "Updating database settings in config.php..."
         
+        # Export credentials as environment variables to pass to PHP safely
+        # This avoids shell escaping issues with special characters
+        export NC_DB_USER="$DB_USER"
+        export NC_DB_PASS="$DB_PASS"
+        export NC_CONFIG_PATH="$NC_CONFIG_FILE"
+        
         # Use PHP to update the config.php safely
         # This is the most reliable way since config.php is a PHP file
-        php -r "
-\$configFile = '$NC_CONFIG_FILE';
-include \$configFile;
-\$config = \$CONFIG;
+        php -r '
+$configFile = getenv("NC_CONFIG_PATH");
+include $configFile;
+$config = $CONFIG;
 
 // Update database settings
-\$config['dbtype'] = 'pgsql';
-\$config['dbhost'] = 'localhost';
-\$config['dbport'] = '5432';
-\$config['dbuser'] = '$DB_USER';
-\$config['dbpassword'] = '$DB_PASS';
-\$config['installed'] = false;
+$config["dbtype"] = "pgsql";
+$config["dbhost"] = "localhost";
+$config["dbport"] = "5432";
+$config["dbuser"] = getenv("NC_DB_USER");
+$config["dbpassword"] = getenv("NC_DB_PASS");
+$config["installed"] = false;
 
 // Remove MySQL-specific setting
-if (isset(\$config['mysql.utf8mb4'])) {
-    unset(\$config['mysql.utf8mb4']);
+if (isset($config["mysql.utf8mb4"])) {
+    unset($config["mysql.utf8mb4"]);
 }
 
 // Write back the config
-\$content = \"<?php\n\\\$CONFIG = \" . var_export(\$config, true) . \";\n\";
-file_put_contents(\$configFile, \$content);
-echo 'Config updated successfully';
-" 2>/dev/null
+$content = "<?php\n\$CONFIG = " . var_export($config, true) . ";\n";
+file_put_contents($configFile, $content);
+echo "Config updated successfully";
+' 2>/dev/null
+
+        # Unset the exported variables for security
+        unset NC_DB_USER NC_DB_PASS NC_CONFIG_PATH
 
         if [ $? -eq 0 ]; then
             log_info "config.php updated for PostgreSQL"
