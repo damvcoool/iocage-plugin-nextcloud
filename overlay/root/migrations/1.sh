@@ -74,12 +74,19 @@ else
         
         # Wait for MySQL to be ready
         log_info "Waiting for MySQL to be ready..."
-        until mysql --user dbadmin --password="$(cat /root/dbpassword)" --execute "SHOW DATABASES" > /dev/null 2>/dev/null
+        max_attempts=30
+        attempt=0
+        until mysql --user dbadmin --password="$(cat /root/dbpassword)" --execute "SHOW DATABASES" > /dev/null 2>/dev/null || [ $attempt -eq $max_attempts ]
         do
-            log_info "MySQL is unavailable - sleeping"
-            sleep 1
+            attempt=$((attempt + 1))
+            log_info "MySQL is unavailable - attempt $attempt of $max_attempts"
+            sleep 2
         done
-        log_info "MySQL is ready"
+        if [ $attempt -lt $max_attempts ]; then
+            log_info "MySQL is ready"
+        else
+            log_warn "MySQL did not become ready in time"
+        fi
     else
         log_warn "No database service enabled in rc.conf"
     fi
