@@ -57,6 +57,27 @@ else
     # No database service running - check if PostgreSQL is enabled and start it
     log_info "No database service running"
     if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+        # Check if PostgreSQL needs initialization (data directory doesn't exist)
+        # Look for any postgres data directory (supports different PostgreSQL versions)
+        PG_DATA_FOUND=0
+        for pg_data_dir in /var/db/postgres/data* ; do
+            if [ -d "$pg_data_dir" ]; then
+                PG_DATA_FOUND=1
+                break
+            fi
+        done
+        
+        if [ "$PG_DATA_FOUND" = "0" ]; then
+            log_info "PostgreSQL not initialized - initializing now..."
+            # Set authentication options to suppress initdb warning about "trust" authentication
+            sysrc -f /etc/rc.conf postgresql_initdb_flags="--auth-local=trust --auth-host=trust"
+            if /usr/local/etc/rc.d/postgresql oneinitdb 2>/dev/null; then
+                log_info "PostgreSQL initialized successfully"
+            else
+                log_warn "PostgreSQL initialization may have failed - service start will be attempted"
+            fi
+        fi
+        
         log_info "PostgreSQL is enabled, starting service..."
         service postgresql start 2>/dev/null || true
         
