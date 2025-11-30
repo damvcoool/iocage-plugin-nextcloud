@@ -512,7 +512,7 @@ else
     fi
 fi
 
-if [ "$AUTO_MODE" = "0" ]; then
+if [ "$AUTO_MODE" = "0" ] && [ -n "$PRE_UPDATE_BACKUP" ]; then
     echo ""
     echo "Backup location: $PRE_UPDATE_BACKUP"
     echo ""
