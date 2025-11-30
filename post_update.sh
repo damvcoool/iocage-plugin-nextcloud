@@ -373,8 +373,9 @@ fi
 log_step_end "Waiting for database to be ready"
 
 # Check if we need to run MySQL to PostgreSQL migration
-# This happens when the previous database was MySQL and now we're on PostgreSQL
-log_step_start "Checking for MySQL to PostgreSQL migration"
+# Migration should have been done in pre_update.sh using occ db:convert-type
+# This section handles fallback if that failed
+log_step_start "Checking for MySQL to PostgreSQL migration status"
 MIGRATION_NEEDED=0
 MIGRATION_SUCCESS=1
 PREVIOUS_DB_TYPE=""
@@ -384,33 +385,43 @@ if [ -n "$PRE_UPDATE_BACKUP" ] && [ -f "$PRE_UPDATE_BACKUP/database_type.txt" ];
     log_info "Previous database type: $PREVIOUS_DB_TYPE"
     
     if [ "$PREVIOUS_DB_TYPE" = "mysql" ]; then
-        # Previous DB was MySQL - check if PostgreSQL has Nextcloud data
-        if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+        # Check if migration was done in pre_update
+        MIGRATION_METHOD=""
+        if [ -f "$PRE_UPDATE_BACKUP/migration_method.txt" ]; then
+            MIGRATION_METHOD=$(cat "$PRE_UPDATE_BACKUP/migration_method.txt")
+            log_info "Migration method from pre_update: $MIGRATION_METHOD"
+        fi
+        
+        if [ "$MIGRATION_METHOD" = "occ_convert_success" ]; then
+            log_info "Database migration was completed in pre_update using occ db:convert-type"
+            MIGRATION_SUCCESS=1
+        elif grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
             # Check if PostgreSQL database has Nextcloud tables
             if su -m postgres -c "psql -d nextcloud -c \"SELECT 1 FROM oc_users LIMIT 1\"" >/dev/null 2>&1; then
                 log_info "PostgreSQL already has Nextcloud data - migration not needed"
+                MIGRATION_SUCCESS=1
             else
-                log_info "Previous DB was MySQL and PostgreSQL is empty - automatic migration needed"
+                log_info "Previous DB was MySQL and PostgreSQL is empty - fallback migration needed"
                 MIGRATION_NEEDED=1
                 
-                # Check if MySQL backup exists
+                # Check if MySQL backup exists for fallback
                 if [ -f "$PRE_UPDATE_BACKUP/nextcloud_mysql.sql" ]; then
                     log_info "MySQL backup found at: $PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
-                    log_step_start "Running automatic MySQL to PostgreSQL migration"
+                    log_step_start "Running fallback MySQL to PostgreSQL migration"
                     
-                    # Run the migration script in auto mode
+                    # Run the migration script in auto mode (uses sed-based conversion as fallback)
                     if /root/migrate_mysql_to_postgresql.sh --auto; then
-                        log_info "Automatic MySQL to PostgreSQL migration completed successfully"
+                        log_info "Fallback MySQL to PostgreSQL migration completed successfully"
                         MIGRATION_SUCCESS=1
                     else
-                        log_warn "Automatic MySQL to PostgreSQL migration failed"
+                        log_warn "Fallback MySQL to PostgreSQL migration failed"
                         log_warn "Your MySQL backup is preserved at: $PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
-                        log_warn "You can try running /root/migrate_mysql_to_postgresql.sh manually"
+                        log_warn "You may need to do a fresh Nextcloud installation"
                         log_warn "Skipping Nextcloud occ commands since database is not ready"
                         MIGRATION_SUCCESS=0
                     fi
                     
-                    log_step_end "Running automatic MySQL to PostgreSQL migration"
+                    log_step_end "Running fallback MySQL to PostgreSQL migration"
                 else
                     log_warn "MySQL backup not found at $PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
                     log_warn "Cannot perform automatic migration - manual intervention required"
@@ -423,7 +434,7 @@ if [ -n "$PRE_UPDATE_BACKUP" ] && [ -f "$PRE_UPDATE_BACKUP/database_type.txt" ];
 else
     log_info "No previous database type recorded - assuming normal upgrade"
 fi
-log_step_end "Checking for MySQL to PostgreSQL migration"
+log_step_end "Checking for MySQL to PostgreSQL migration status"
 
 # Fix installed flag if it was incorrectly set to false
 # This can happen if a MySQL to PostgreSQL migration was started but the data already exists

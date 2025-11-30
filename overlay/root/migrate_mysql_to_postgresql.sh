@@ -2,13 +2,17 @@
 
 set -eu
 
-# Check for --auto flag for non-interactive mode (used during automatic upgrades)
+# Check for flags
 AUTO_MODE=0
+FORCE_SQL_FALLBACK=0
 MYSQL_BACKUP_ARG=""
 for arg in "$@"; do
     case "$arg" in
         --auto)
             AUTO_MODE=1
+            ;;
+        --force-sql-fallback)
+            FORCE_SQL_FALLBACK=1
             ;;
         *)
             # Assume it's a backup file path
@@ -33,18 +37,17 @@ fi
 
 if [ "$AUTO_MODE" = "0" ]; then
     echo "========================================"
-    echo "MySQL to PostgreSQL 18 Migration Tool"
+    echo "MySQL to PostgreSQL Migration Tool"
     echo "========================================"
     echo ""
-    echo "This script migrates your Nextcloud data from a MySQL backup to PostgreSQL."
+    echo "This script migrates your Nextcloud data from MySQL to PostgreSQL."
     echo ""
-    echo "This tool is designed to run AFTER the plugin upgrade when:"
-    echo "  - MySQL is no longer installed"
-    echo "  - PostgreSQL is already initialized and running"
-    echo "  - A MySQL backup exists from the pre-update process"
+    echo "RECOMMENDED: Use Nextcloud's built-in occ db:convert-type command"
+    echo "This requires MySQL to still be running alongside PostgreSQL."
     echo ""
-else
-    log_step_start "Automatic MySQL to PostgreSQL Migration"
+    echo "FALLBACK: If MySQL is no longer available, this script can attempt"
+    echo "to import from a MySQL SQL backup file (less reliable)."
+    echo ""
 fi
 
 # Load environment
@@ -69,72 +72,12 @@ DB_PASS=$(cat /root/dbpassword 2>/dev/null || echo "")
 DB_NAME="nextcloud"
 
 if [ -z "$DB_PASS" ]; then
-    echo "ERROR: Cannot read database password from /root/dbpassword"
+    if [ "$AUTO_MODE" = "1" ]; then
+        log_error "Cannot read database password from /root/dbpassword"
+    else
+        echo "ERROR: Cannot read database password from /root/dbpassword"
+    fi
     exit 1
-fi
-
-# Find the MySQL backup from pre_update
-PRE_UPDATE_BACKUP=""
-MYSQL_BACKUP=""
-
-if [ -f /root/last_pre_update_backup ]; then
-    PRE_UPDATE_BACKUP=$(cat /root/last_pre_update_backup)
-    if [ -f "$PRE_UPDATE_BACKUP/nextcloud_mysql.sql" ]; then
-        MYSQL_BACKUP="$PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
-    fi
-fi
-
-# Also check for manual backup locations
-if [ -z "$MYSQL_BACKUP" ]; then
-    # Look for any mysql backup in /root
-    for backup_dir in /root/pre_update_backup_* /root/mysql_backup_*; do
-        if [ -d "$backup_dir" ]; then
-            for sql_file in "$backup_dir"/nextcloud_mysql.sql "$backup_dir"/nextcloud.sql; do
-                if [ -f "$sql_file" ] && [ -s "$sql_file" ]; then
-                    MYSQL_BACKUP="$sql_file"
-                    PRE_UPDATE_BACKUP="$backup_dir"
-                    break 2
-                fi
-            done
-        fi
-    done
-fi
-
-if [ -z "$MYSQL_BACKUP" ]; then
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_error "No MySQL backup found - cannot perform automatic migration"
-        log_step_end "Automatic MySQL to PostgreSQL Migration" "failed - no backup"
-        exit 1
-    else
-        echo "ERROR: No MySQL backup found."
-        echo ""
-        echo "Expected locations:"
-        echo "  - From pre_update: Check /root/last_pre_update_backup"
-        echo "  - Manual backup: /root/pre_update_backup_*/nextcloud_mysql.sql"
-        echo "  - Manual backup: /root/mysql_backup_*/nextcloud.sql"
-        echo ""
-        echo "If you have a MySQL dump elsewhere, you can specify it as an argument:"
-        echo "  $0 /path/to/mysql_backup.sql"
-        exit 1
-    fi
-fi
-
-# Allow override via command line argument (already parsed above for auto mode)
-if [ -n "$MYSQL_BACKUP_ARG" ]; then
-    MYSQL_BACKUP="$MYSQL_BACKUP_ARG"
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_info "Using specified MySQL backup: $MYSQL_BACKUP"
-    else
-        echo "Using specified MySQL backup: $MYSQL_BACKUP"
-    fi
-fi
-
-BACKUP_SIZE=$(du -h "$MYSQL_BACKUP" | cut -f1)
-if [ "$AUTO_MODE" = "1" ]; then
-    log_info "Found MySQL backup: $MYSQL_BACKUP ($BACKUP_SIZE)"
-else
-    echo "Found MySQL backup: $MYSQL_BACKUP ($BACKUP_SIZE)"
-    echo ""
 fi
 
 # Check PostgreSQL status
@@ -150,7 +93,6 @@ if ! service postgresql status >/dev/null 2>&1; then
     if ! service postgresql status >/dev/null 2>&1; then
         if [ "$AUTO_MODE" = "1" ]; then
             log_error "Could not start PostgreSQL"
-            log_step_end "Automatic MySQL to PostgreSQL Migration" "failed - PostgreSQL not starting"
         else
             echo "ERROR: Could not start PostgreSQL"
         fi
@@ -158,321 +100,365 @@ if ! service postgresql status >/dev/null 2>&1; then
     fi
 fi
 
-if [ "$AUTO_MODE" = "1" ]; then
-    log_info "PostgreSQL is running."
-else
-    echo "PostgreSQL is running."
-fi
-
-# In auto mode, skip the confirmation prompt
-if [ "$AUTO_MODE" = "0" ]; then
-    echo ""
-    echo "WARNING: This will migrate data from MySQL backup to PostgreSQL."
-    echo "  - Nginx and PHP-FPM will be stopped during migration"
-    echo "  - The PostgreSQL database will be recreated (existing data will be lost)"
-    echo ""
-    echo "Press CTRL+C to cancel, or press ENTER to continue..."
-    read dummy
-fi
-
-# Stop web services
-if [ "$AUTO_MODE" = "1" ]; then
-    log_info "Stopping web services for migration..."
-else
-    echo ""
-    echo "Stopping web services..."
-fi
-service nginx stop 2>/dev/null || true
-php_fpm_service stop || true
-
-# Ensure PostgreSQL database exists and is empty
-if [ "$AUTO_MODE" = "1" ]; then
-    log_info "Preparing PostgreSQL database..."
-else
-    echo ""
-    echo "Preparing PostgreSQL database..."
+# Check if MySQL is available for occ db:convert-type
+MYSQL_AVAILABLE=0
+if service mysql-server status >/dev/null 2>&1; then
+    MYSQL_AVAILABLE=1
 fi
 
 # Escape single quotes in password for SQL
 DB_PASS_SQL=$(printf '%s' "$DB_PASS" | sed "s/'/''/g")
 
-# Drop and recreate the database to ensure clean state
-su -m postgres -c "psql -c \"DROP DATABASE IF EXISTS $DB_NAME;\"" 2>/dev/null || true
-su -m postgres -c "psql -c \"DROP USER IF EXISTS $DB_USER;\"" 2>/dev/null || true
+# Ensure PostgreSQL database exists
+ensure_postgresql_db() {
+    # Check if database already exists
+    if su -m postgres -c "psql -lqt | cut -d \| -f 1 | grep -qw $DB_NAME" 2>/dev/null; then
+        if [ "$AUTO_MODE" = "1" ]; then
+            log_info "PostgreSQL database '$DB_NAME' already exists"
+        else
+            echo "PostgreSQL database '$DB_NAME' already exists"
+        fi
+    else
+        if [ "$AUTO_MODE" = "1" ]; then
+            log_info "Creating PostgreSQL user and database..."
+        else
+            echo "Creating PostgreSQL user and database..."
+        fi
+        # Create user and database using ALTER USER for password (more secure)
+        su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH NOSUPERUSER NOCREATEDB NOCREATEROLE;\"" 2>/dev/null || true
+        su -m postgres -c "psql -c \"ALTER USER $DB_USER WITH PASSWORD '$DB_PASS_SQL';\"" 2>/dev/null || true
+        su -m postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER ENCODING 'UTF8' TEMPLATE template0;\"" 2>/dev/null || true
+        su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" 2>/dev/null || true
+        su -m postgres -c "psql -d $DB_NAME -c \"GRANT ALL ON SCHEMA public TO $DB_USER;\"" 2>/dev/null || true
+    fi
+}
 
-# Create user and database
-su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS_SQL' NOSUPERUSER NOCREATEDB NOCREATEROLE;\""
-su -m postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER ENCODING 'UTF8' TEMPLATE template0;\""
-su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\""
-su -m postgres -c "psql -d $DB_NAME -c \"GRANT ALL ON SCHEMA public TO $DB_USER;\""
+# Method 1: Use occ db:convert-type (RECOMMENDED)
+try_occ_convert() {
+    if [ "$AUTO_MODE" = "1" ]; then
+        log_info "Attempting migration using occ db:convert-type..."
+    else
+        echo ""
+        echo "Attempting migration using occ db:convert-type..."
+        echo "This is the recommended method and handles all schema conversions properly."
+        echo ""
+    fi
+    
+    ensure_postgresql_db
+    
+    # Make sure Nextcloud is NOT in maintenance mode for this operation
+    su -m www -c "php /usr/local/www/nextcloud/occ maintenance:mode --off" 2>/dev/null || true
+    
+    # Run the migration using environment variable for password (more secure than command line)
+    export OCC_DB_PASS="$DB_PASS"
+    if su -m www -c "php /usr/local/www/nextcloud/occ db:convert-type --all-apps --password \"\$OCC_DB_PASS\" pgsql '$DB_USER' localhost '$DB_NAME'" 2>&1; then
+        unset OCC_DB_PASS
+        if [ "$AUTO_MODE" = "1" ]; then
+            log_info "occ db:convert-type completed successfully!"
+        else
+            echo ""
+            echo "SUCCESS: Database migration completed using occ db:convert-type!"
+        fi
+        return 0
+    else
+        unset OCC_DB_PASS
+        if [ "$AUTO_MODE" = "1" ]; then
+            log_warn "occ db:convert-type failed"
+        else
+            echo ""
+            echo "WARNING: occ db:convert-type failed"
+        fi
+        return 1
+    fi
+}
 
-if [ "$AUTO_MODE" = "1" ]; then
-    log_info "PostgreSQL database prepared."
-else
-    echo "PostgreSQL database prepared."
-fi
-
-# Attempt to convert and import MySQL dump to PostgreSQL
-# Note: This uses sed transformations to convert MySQL syntax to PostgreSQL
-if [ "$AUTO_MODE" = "1" ]; then
-    log_info "Converting MySQL dump to PostgreSQL format..."
-    log_info "This may take a while depending on database size..."
-else
-    echo ""
-    echo "Converting MySQL dump to PostgreSQL format..."
-    echo "This may take a while depending on database size..."
-fi
-
-# Create a temporary converted SQL file
-CONVERTED_SQL="/tmp/nextcloud_pg_converted.sql"
-
-# MySQL to PostgreSQL conversion
-# This handles common differences between MySQL and PostgreSQL SQL syntax
-cat "$MYSQL_BACKUP" | \
-    sed 's/`//g' | \
-    sed 's/ENGINE=InnoDB[^;]*//gi' | \
-    sed 's/ENGINE=MyISAM[^;]*//gi' | \
-    sed 's/DEFAULT CHARSET=[a-zA-Z0-9_]*//gi' | \
-    sed 's/COLLATE=[a-zA-Z0-9_]*//gi' | \
-    sed 's/COLLATE [a-zA-Z0-9_]*//gi' | \
-    sed 's/AUTO_INCREMENT=[0-9]*//gi' | \
-    sed 's/UNSIGNED//gi' | \
-    sed 's/  */ /g' | \
-    sed 's/bigint([0-9]*) NOT NULL AUTO_INCREMENT/BIGSERIAL/gi' | \
-    sed 's/bigint NOT NULL AUTO_INCREMENT/BIGSERIAL/gi' | \
-    sed 's/int([0-9]*) NOT NULL AUTO_INCREMENT/SERIAL/gi' | \
-    sed 's/int NOT NULL AUTO_INCREMENT/SERIAL/gi' | \
-    sed 's/AUTO_INCREMENT/SERIAL/gi' | \
-    sed 's/\\'\''/'\'\''/g' | \
-    sed 's/TINYINT(1)/BOOLEAN/gi' | \
-    sed 's/TINYINT([0-9]*)/SMALLINT/gi' | \
-    sed 's/MEDIUMINT([0-9]*)/INTEGER/gi' | \
-    sed 's/INT([0-9]*)/INTEGER/gi' | \
-    sed 's/BIGINT([0-9]*)/BIGINT/gi' | \
-    sed 's/DOUBLE/DOUBLE PRECISION/gi' | \
-    sed 's/FLOAT([0-9,]*)/REAL/gi' | \
-    sed 's/DATETIME/TIMESTAMP/gi' | \
-    sed 's/LONGTEXT/TEXT/gi' | \
-    sed 's/MEDIUMTEXT/TEXT/gi' | \
-    sed 's/TINYTEXT/TEXT/gi' | \
-    sed 's/LONGBLOB/BYTEA/gi' | \
-    sed 's/MEDIUMBLOB/BYTEA/gi' | \
-    sed 's/TINYBLOB/BYTEA/gi' | \
-    sed 's/BLOB/BYTEA/gi' | \
-    sed 's/VARBINARY([0-9]*)/BYTEA/gi' | \
-    sed 's/BINARY([0-9]*)/BYTEA/gi' | \
-    sed '/^[[:space:]]*KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
-    sed '/^[[:space:]]*UNIQUE KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
-    sed '/^[[:space:]]*FULLTEXT KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
-    sed '/^\/\*!.*\*\/;$/d' | \
-    sed '/^SET /d' | \
-    sed '/^LOCK TABLES/d' | \
-    sed '/^UNLOCK TABLES/d' | \
-    sed '/^--/d' | \
-    grep -v "^$" | \
-    awk '
-    {
-        if (NR > 1) {
-            # If current line starts with ), remove trailing comma from previous line
-            if ($0 ~ /^[[:space:]]*\)/) {
-                gsub(/,[[:space:]]*$/, "", prev_line)
+# Method 2: SQL Fallback - Import from MySQL SQL dump (less reliable)
+try_sql_fallback() {
+    if [ "$AUTO_MODE" = "1" ]; then
+        log_info "Attempting SQL fallback migration from MySQL backup..."
+    else
+        echo ""
+        echo "Attempting SQL fallback migration from MySQL backup..."
+        echo "Note: This method is less reliable than occ db:convert-type."
+        echo ""
+    fi
+    
+    # Find the MySQL backup
+    PRE_UPDATE_BACKUP=""
+    MYSQL_BACKUP=""
+    
+    if [ -f /root/last_pre_update_backup ]; then
+        PRE_UPDATE_BACKUP=$(cat /root/last_pre_update_backup)
+        if [ -f "$PRE_UPDATE_BACKUP/nextcloud_mysql.sql" ]; then
+            MYSQL_BACKUP="$PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
+        fi
+    fi
+    
+    # Also check for manual backup locations
+    if [ -z "$MYSQL_BACKUP" ]; then
+        for backup_dir in /root/pre_update_backup_* /root/mysql_backup_*; do
+            if [ -d "$backup_dir" ]; then
+                for sql_file in "$backup_dir"/nextcloud_mysql.sql "$backup_dir"/nextcloud.sql; do
+                    if [ -f "$sql_file" ] && [ -s "$sql_file" ]; then
+                        MYSQL_BACKUP="$sql_file"
+                        PRE_UPDATE_BACKUP="$backup_dir"
+                        break 2
+                    fi
+                done
+            fi
+        done
+    fi
+    
+    # Allow override via command line argument
+    if [ -n "$MYSQL_BACKUP_ARG" ]; then
+        MYSQL_BACKUP="$MYSQL_BACKUP_ARG"
+    fi
+    
+    if [ -z "$MYSQL_BACKUP" ] || [ ! -f "$MYSQL_BACKUP" ]; then
+        if [ "$AUTO_MODE" = "1" ]; then
+            log_error "No MySQL backup found for SQL fallback"
+        else
+            echo "ERROR: No MySQL backup found."
+            echo "Expected locations:"
+            echo "  - From pre_update: Check /root/last_pre_update_backup"
+            echo "  - Manual backup: /root/pre_update_backup_*/nextcloud_mysql.sql"
+        fi
+        return 1
+    fi
+    
+    BACKUP_SIZE=$(du -h "$MYSQL_BACKUP" | cut -f1)
+    if [ "$AUTO_MODE" = "1" ]; then
+        log_info "Found MySQL backup: $MYSQL_BACKUP ($BACKUP_SIZE)"
+    else
+        echo "Found MySQL backup: $MYSQL_BACKUP ($BACKUP_SIZE)"
+    fi
+    
+    # Stop web services
+    if [ "$AUTO_MODE" = "1" ]; then
+        log_info "Stopping web services for migration..."
+    else
+        echo "Stopping web services..."
+    fi
+    service nginx stop 2>/dev/null || true
+    php_fpm_service stop || true
+    
+    # Prepare PostgreSQL database (drop and recreate for clean state)
+    if [ "$AUTO_MODE" = "1" ]; then
+        log_info "Preparing PostgreSQL database..."
+    else
+        echo "Preparing PostgreSQL database..."
+    fi
+    
+    su -m postgres -c "psql -c \"DROP DATABASE IF EXISTS $DB_NAME;\"" 2>/dev/null || true
+    su -m postgres -c "psql -c \"DROP USER IF EXISTS $DB_USER;\"" 2>/dev/null || true
+    # Create user and set password separately for security
+    su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH NOSUPERUSER NOCREATEDB NOCREATEROLE;\"" 2>/dev/null || true
+    su -m postgres -c "psql -c \"ALTER USER $DB_USER WITH PASSWORD '$DB_PASS_SQL';\"" 2>/dev/null || true
+    su -m postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER ENCODING 'UTF8' TEMPLATE template0;\"" 2>/dev/null || true
+    su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" 2>/dev/null || true
+    su -m postgres -c "psql -d $DB_NAME -c \"GRANT ALL ON SCHEMA public TO $DB_USER;\"" 2>/dev/null || true
+    
+    # Convert and import MySQL dump to PostgreSQL
+    if [ "$AUTO_MODE" = "1" ]; then
+        log_info "Converting MySQL dump to PostgreSQL format..."
+    else
+        echo "Converting MySQL dump to PostgreSQL format..."
+    fi
+    
+    CONVERTED_SQL="/tmp/nextcloud_pg_converted.sql"
+    
+    # MySQL to PostgreSQL conversion using sed
+    cat "$MYSQL_BACKUP" | \
+        sed 's/`//g' | \
+        sed 's/ENGINE=InnoDB[^;]*//gi' | \
+        sed 's/ENGINE=MyISAM[^;]*//gi' | \
+        sed 's/DEFAULT CHARSET=[a-zA-Z0-9_]*//gi' | \
+        sed 's/COLLATE=[a-zA-Z0-9_]*//gi' | \
+        sed 's/COLLATE [a-zA-Z0-9_]*//gi' | \
+        sed 's/AUTO_INCREMENT=[0-9]*//gi' | \
+        sed 's/UNSIGNED//gi' | \
+        sed 's/  */ /g' | \
+        sed 's/bigint([0-9]*) NOT NULL AUTO_INCREMENT/BIGSERIAL/gi' | \
+        sed 's/bigint NOT NULL AUTO_INCREMENT/BIGSERIAL/gi' | \
+        sed 's/int([0-9]*) NOT NULL AUTO_INCREMENT/SERIAL/gi' | \
+        sed 's/int NOT NULL AUTO_INCREMENT/SERIAL/gi' | \
+        sed 's/AUTO_INCREMENT/SERIAL/gi' | \
+        sed 's/\\'\''/'\'\''/g' | \
+        sed 's/TINYINT(1)/SMALLINT/gi' | \
+        sed 's/TINYINT([0-9]*)/SMALLINT/gi' | \
+        sed 's/MEDIUMINT([0-9]*)/INTEGER/gi' | \
+        sed 's/INT([0-9]*)/INTEGER/gi' | \
+        sed 's/BIGINT([0-9]*)/BIGINT/gi' | \
+        sed 's/DOUBLE/DOUBLE PRECISION/gi' | \
+        sed 's/FLOAT([0-9,]*)/REAL/gi' | \
+        sed 's/DATETIME/TIMESTAMP/gi' | \
+        sed 's/LONGTEXT/TEXT/gi' | \
+        sed 's/MEDIUMTEXT/TEXT/gi' | \
+        sed 's/TINYTEXT/TEXT/gi' | \
+        sed 's/LONGBLOB/BYTEA/gi' | \
+        sed 's/MEDIUMBLOB/BYTEA/gi' | \
+        sed 's/TINYBLOB/BYTEA/gi' | \
+        sed 's/BLOB/BYTEA/gi' | \
+        sed 's/VARBINARY([0-9]*)/BYTEA/gi' | \
+        sed 's/BINARY([0-9]*)/BYTEA/gi' | \
+        sed '/^[[:space:]]*KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
+        sed '/^[[:space:]]*UNIQUE KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
+        sed '/^[[:space:]]*FULLTEXT KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
+        sed '/^\/\*!.*\*\/;$/d' | \
+        sed '/^SET /d' | \
+        sed '/^LOCK TABLES/d' | \
+        sed '/^UNLOCK TABLES/d' | \
+        sed '/^--/d' | \
+        sed 's/[[:space:]]user[[:space:]]/ "user" /gi' | \
+        sed 's/, user,/, "user",/gi' | \
+        sed 's/,user,/,"user",/gi' | \
+        sed 's/(user,/("user",/gi' | \
+        sed 's/, user)/, "user")/gi' | \
+        sed 's/,user)/,"user")/gi' | \
+        grep -v "^$" | \
+        awk '
+        {
+            if (NR > 1) {
+                if ($0 ~ /^[[:space:]]*\)/) {
+                    gsub(/,[[:space:]]*$/, "", prev_line)
+                }
+                print prev_line
             }
+            prev_line = $0
+        }
+        END {
             print prev_line
         }
-        prev_line = $0
-    }
-    END {
-        print prev_line
-    }
-    ' > "$CONVERTED_SQL" || true
-
-IMPORT_SUCCESS=0
-if [ -s "$CONVERTED_SQL" ]; then
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_info "Importing converted SQL into PostgreSQL..."
-    else
-        echo "Importing converted SQL into PostgreSQL..."
-    fi
+        ' > "$CONVERTED_SQL" || true
     
-    # Import the converted SQL
-    if PGPASSWORD="$DB_PASS" psql -U "$DB_USER" -h localhost -d "$DB_NAME" -f "$CONVERTED_SQL" 2>/tmp/pg_import_errors.log; then
+    IMPORT_SUCCESS=0
+    if [ -s "$CONVERTED_SQL" ]; then
         if [ "$AUTO_MODE" = "1" ]; then
-            log_info "Import completed."
+            log_info "Importing converted SQL into PostgreSQL..."
         else
-            echo "Import completed."
+            echo "Importing converted SQL into PostgreSQL..."
         fi
-        IMPORT_SUCCESS=1
-        # Check if there were errors
-        if [ -s /tmp/pg_import_errors.log ]; then
-            if [ "$AUTO_MODE" = "1" ]; then
-                log_warn "Some warnings/errors occurred during import. Full log at: /tmp/pg_import_errors.log"
-            else
-                echo "Some warnings/errors occurred during import:"
-                head -20 /tmp/pg_import_errors.log
-                echo "..."
-                echo "Full log at: /tmp/pg_import_errors.log"
-            fi
+        
+        if PGPASSWORD="$DB_PASS" psql -U "$DB_USER" -h localhost -d "$DB_NAME" -f "$CONVERTED_SQL" 2>/tmp/pg_import_errors.log; then
+            IMPORT_SUCCESS=1
         fi
-    else
-        if [ "$AUTO_MODE" = "1" ]; then
-            log_warn "Import had errors. Check /tmp/pg_import_errors.log"
-        else
-            echo "WARNING: Import had errors. Check /tmp/pg_import_errors.log"
-            echo ""
-            echo "The automatic SQL conversion may not handle all MySQL-specific syntax."
-        fi
+        rm -f "$CONVERTED_SQL"
     fi
     
-    rm -f "$CONVERTED_SQL"
-else
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_warn "SQL conversion produced empty output."
-    else
-        echo "WARNING: SQL conversion produced empty output."
-    fi
-fi
-
-# If automatic import failed, provide guidance
-if [ "$IMPORT_SUCCESS" = "0" ]; then
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_warn "========================================"
-        log_warn "AUTOMATIC MIGRATION FAILED"
-        log_warn "========================================"
-        log_warn "The automatic SQL conversion could not complete successfully."
-        log_warn "Your MySQL backup is preserved at: $MYSQL_BACKUP"
-        log_warn "You may need to do a fresh Nextcloud installation."
-        log_warn "========================================"
-    else
-        echo ""
-        echo "========================================"
-        echo "MANUAL MIGRATION MAY BE REQUIRED"
-        echo "========================================"
-        echo ""
-        echo "The automatic SQL conversion could not complete successfully."
-        echo "Your MySQL backup is preserved at: $MYSQL_BACKUP"
-        echo ""
-        echo "You can do a fresh Nextcloud installation:"
-        echo "  1. Access the web interface"
-        echo "  2. Complete the setup wizard"
-        echo "  3. Your files in the data directory will still be there"
-        echo "     (but user accounts and settings will need to be recreated)"
-        echo ""
-        echo "Your MySQL backup is preserved at: $MYSQL_BACKUP"
-        echo "========================================"
-    fi
-fi
-
-# Update Nextcloud config.php to use PostgreSQL
-if [ "$AUTO_MODE" = "1" ]; then
-    log_info "Updating Nextcloud configuration..."
-else
-    echo ""
-    echo "Updating Nextcloud configuration..."
-fi
-
-NC_CONFIG="/usr/local/www/nextcloud/config/config.php"
-if [ -f "$NC_CONFIG" ]; then
-    # Use PHP to safely update the config
-    # Pass credentials via environment variables to avoid escaping issues
-    export NC_DB_USER="$DB_USER"
-    export NC_DB_PASS="$DB_PASS"
-    export NC_DB_NAME="$DB_NAME"
-    export NC_CONFIG_PATH="$NC_CONFIG"
+    # Verify migration
+    TABLE_COUNT=$(su -m postgres -c "psql -d $DB_NAME -t -c \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';\"" 2>/dev/null | tr -d ' ' || echo "0")
     
-    php -r '
+    if [ "$TABLE_COUNT" -gt 0 ]; then
+        # Update Nextcloud config.php to use PostgreSQL
+        NC_CONFIG="/usr/local/www/nextcloud/config/config.php"
+        if [ -f "$NC_CONFIG" ]; then
+            export NC_DB_USER="$DB_USER"
+            export NC_DB_PASS="$DB_PASS"
+            export NC_DB_NAME="$DB_NAME"
+            export NC_CONFIG_PATH="$NC_CONFIG"
+            
+            php -r '
 $configFile = getenv("NC_CONFIG_PATH");
 if (file_exists($configFile)) {
     include $configFile;
     $config = isset($CONFIG) ? $CONFIG : array();
-    
-    // Update database settings
     $config["dbtype"] = "pgsql";
     $config["dbhost"] = "localhost";
     $config["dbport"] = "5432";
     $config["dbuser"] = getenv("NC_DB_USER");
     $config["dbpassword"] = getenv("NC_DB_PASS");
     $config["dbname"] = getenv("NC_DB_NAME");
-    
-    // Remove MySQL-specific setting
     if (isset($config["mysql.utf8mb4"])) {
         unset($config["mysql.utf8mb4"]);
     }
-    
-    // Write back the config
     $content = "<?php\n\$CONFIG = " . var_export($config, true) . ";\n";
     file_put_contents($configFile, $content);
-    echo "Config updated successfully\n";
-} else {
-    echo "Config file not found\n";
-    exit(1);
 }
 '
-    
-    # Clear environment variables
-    unset NC_DB_USER NC_DB_PASS NC_DB_NAME NC_CONFIG_PATH
-    
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_info "Nextcloud config.php updated for PostgreSQL."
+            unset NC_DB_USER NC_DB_PASS NC_DB_NAME NC_CONFIG_PATH
+        fi
+        
+        if [ "$AUTO_MODE" = "1" ]; then
+            log_info "SQL fallback migration completed - $TABLE_COUNT tables imported"
+        else
+            echo "SUCCESS: SQL fallback migration completed - $TABLE_COUNT tables imported"
+        fi
+        return 0
     else
-        echo "Nextcloud config.php updated for PostgreSQL."
+        if [ "$AUTO_MODE" = "1" ]; then
+            log_warn "SQL fallback migration failed - no tables in database"
+        else
+            echo "WARNING: SQL fallback migration failed - no tables imported"
+        fi
+        return 1
     fi
-else
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_warn "Nextcloud config.php not found at $NC_CONFIG"
-    else
-        echo "WARNING: Nextcloud config.php not found at $NC_CONFIG"
-    fi
-fi
+}
 
-# Start services (only in interactive mode - post_update.sh will handle this in auto mode)
-if [ "$AUTO_MODE" = "0" ]; then
-    echo ""
-    echo "Starting services..."
-    php_fpm_service start || true
-    service nginx start 2>/dev/null || true
-fi
-
-# Verify migration
+# Main migration logic
 if [ "$AUTO_MODE" = "1" ]; then
-    log_info "Verifying migration..."
-else
-    echo ""
-    echo "Verifying migration..."
+    log_step_start "MySQL to PostgreSQL Migration"
 fi
 
-# Check if PostgreSQL has tables
-TABLE_COUNT=$(su -m postgres -c "psql -d $DB_NAME -t -c \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';\"" 2>/dev/null | tr -d ' ' || echo "0")
+MIGRATION_SUCCESS=0
 
-if [ "$TABLE_COUNT" -gt 0 ]; then
+# Check if PostgreSQL already has Nextcloud data
+if su -m postgres -c "psql -d $DB_NAME -c \"SELECT 1 FROM oc_users LIMIT 1\"" >/dev/null 2>&1; then
     if [ "$AUTO_MODE" = "1" ]; then
-        log_info "SUCCESS: PostgreSQL database has $TABLE_COUNT tables."
-        log_info "Running Nextcloud database maintenance..."
+        log_info "PostgreSQL already has Nextcloud data - migration not needed"
+        log_step_end "MySQL to PostgreSQL Migration" "not needed"
     else
-        echo "SUCCESS: PostgreSQL database has $TABLE_COUNT tables."
+        echo "PostgreSQL already has Nextcloud data - migration not needed."
+    fi
+    exit 0
+fi
+
+# Try occ db:convert-type first if MySQL is available (and not forced to use SQL fallback)
+if [ "$MYSQL_AVAILABLE" = "1" ] && [ "$FORCE_SQL_FALLBACK" = "0" ]; then
+    if [ "$AUTO_MODE" = "0" ]; then
         echo ""
-        echo "Running Nextcloud database maintenance..."
+        echo "MySQL is running - using occ db:convert-type (recommended method)"
+        echo ""
+        echo "Press CTRL+C to cancel, or press ENTER to continue..."
+        read dummy
     fi
     
-    # Disable maintenance mode if it was on
-    su -m www -c "php /usr/local/www/nextcloud/occ maintenance:mode --off" 2>/dev/null || true
+    if try_occ_convert; then
+        MIGRATION_SUCCESS=1
+    fi
+fi
+
+# If occ method failed or MySQL not available, try SQL fallback
+if [ "$MIGRATION_SUCCESS" = "0" ]; then
+    if [ "$AUTO_MODE" = "0" ] && [ "$MYSQL_AVAILABLE" = "0" ]; then
+        echo ""
+        echo "MySQL is not running - will use SQL fallback method"
+        echo ""
+        echo "WARNING: This will recreate the PostgreSQL database from MySQL backup."
+        echo "Press CTRL+C to cancel, or press ENTER to continue..."
+        read dummy
+    fi
     
-    # Add missing indices
-    su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-indices" 2>/dev/null || true
-    
-    # Add missing columns
-    su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-columns" 2>/dev/null || true
-    
-    # Add missing primary keys
-    su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-primary-keys" 2>/dev/null || true
-    
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_info "========================================"
-        log_info "MySQL to PostgreSQL Migration Complete"
-        log_info "========================================"
-        log_step_end "Automatic MySQL to PostgreSQL Migration" "completed successfully"
-        # Exit with success so post_update.sh knows migration worked
-        exit 0
-    else
+    if try_sql_fallback; then
+        MIGRATION_SUCCESS=1
+    fi
+fi
+
+# Final status
+if [ "$MIGRATION_SUCCESS" = "1" ]; then
+    # Start services if in interactive mode
+    if [ "$AUTO_MODE" = "0" ]; then
+        echo ""
+        echo "Starting services..."
+        php_fpm_service start || true
+        service nginx start 2>/dev/null || true
+        
+        # Run Nextcloud maintenance commands
+        echo "Running Nextcloud database maintenance..."
+        su -m www -c "php /usr/local/www/nextcloud/occ maintenance:mode --off" 2>/dev/null || true
+        su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-indices" 2>/dev/null || true
+        su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-columns" 2>/dev/null || true
+        su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-primary-keys" 2>/dev/null || true
+        
         echo ""
         echo "========================================"
         echo "Migration Complete"
@@ -482,33 +468,28 @@ if [ "$TABLE_COUNT" -gt 0 ]; then
         echo "  1. Accessing the web interface"
         echo "  2. Checking that your data is accessible"
         echo "  3. Running: su -m www -c 'php /usr/local/www/nextcloud/occ status'"
-        echo ""
+    else
+        log_info "Migration completed successfully"
+        log_step_end "MySQL to PostgreSQL Migration" "success"
     fi
+    exit 0
 else
     if [ "$AUTO_MODE" = "1" ]; then
-        log_warn "PostgreSQL database appears empty (0 tables)."
-        log_warn "The automatic conversion may have failed."
-        log_warn "Your MySQL backup is preserved at: $MYSQL_BACKUP"
-        log_warn "You may need to do a fresh Nextcloud installation."
-        log_step_end "Automatic MySQL to PostgreSQL Migration" "failed - empty database"
-        # Exit with failure so post_update.sh knows to skip occ commands
-        exit 1
+        log_error "Migration failed"
+        log_step_end "MySQL to PostgreSQL Migration" "failed"
     else
-        echo "WARNING: PostgreSQL database appears empty (0 tables)."
         echo ""
-        echo "The automatic conversion may have failed."
-        echo "Your MySQL backup is preserved at: $MYSQL_BACKUP"
+        echo "========================================"
+        echo "Migration Failed"
+        echo "========================================"
         echo ""
-        echo "You can do a fresh Nextcloud installation:"
-        echo "  1. Access the web interface"
-        echo "  2. Complete the setup wizard"
-        echo "  3. Your files in the data directory will still be there"
-        echo "     (but user accounts and settings will need to be recreated)"
+        echo "The automatic migration could not complete successfully."
+        echo ""
+        echo "Options:"
+        echo "  1. If MySQL is available, try: occ db:convert-type manually"
+        echo "  2. Do a fresh Nextcloud installation via the web interface"
+        echo "     (your files in the data directory will still be there)"
+        echo ""
     fi
-fi
-
-if [ "$AUTO_MODE" = "0" ] && [ -n "$PRE_UPDATE_BACKUP" ]; then
-    echo ""
-    echo "Backup location: $PRE_UPDATE_BACKUP"
-    echo ""
+    exit 1
 fi
