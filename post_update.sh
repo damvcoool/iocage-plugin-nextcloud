@@ -164,10 +164,37 @@ if [ -n "$PRE_UPDATE_BACKUP" ] && [ -d "$PRE_UPDATE_BACKUP" ]; then
         log_info "Previous SSL state: $SSL_STATE"
     fi
 
+    # Read URL scheme from pre_update backup (more reliable than SSL_STATE for determining HTTP vs HTTPS)
+    NC_URL_SCHEME="https"
+    if [ -f "$PRE_UPDATE_BACKUP/nc_url_scheme.txt" ]; then
+        NC_URL_SCHEME=$(cat "$PRE_UPDATE_BACKUP/nc_url_scheme.txt")
+        log_info "Previous URL scheme: $NC_URL_SCHEME"
+    fi
+
     # Restore jail_options.env if it existed (preserves ALLOW_INSECURE_ACCESS setting)
     if [ -f "$PRE_UPDATE_BACKUP/jail_options.env" ]; then
         cp "$PRE_UPDATE_BACKUP/jail_options.env" /root/jail_options.env
         log_info "Restored jail_options.env"
+    fi
+
+    # If the previous URL scheme was HTTP, ensure ALLOW_INSECURE_ACCESS is set
+    # This is more reliable than SSL_STATE because it reflects what Nextcloud was actually using
+    if [ "$NC_URL_SCHEME" = "http" ]; then
+        log_info "Previous configuration used HTTP, ensuring ALLOW_INSECURE_ACCESS=true"
+        if [ ! -f /root/jail_options.env ]; then
+            echo "ALLOW_INSECURE_ACCESS=true" > /root/jail_options.env
+            log_info "Created jail_options.env with ALLOW_INSECURE_ACCESS=true"
+        elif grep -q "ALLOW_INSECURE_ACCESS=true" /root/jail_options.env; then
+            log_info "ALLOW_INSECURE_ACCESS=true already set"
+        elif grep -q "ALLOW_INSECURE_ACCESS" /root/jail_options.env; then
+            # Update existing value (may be set to false or other value)
+            sed -i '' 's/ALLOW_INSECURE_ACCESS=.*/ALLOW_INSECURE_ACCESS=true/' /root/jail_options.env 2>/dev/null || \
+            sed -i 's/ALLOW_INSECURE_ACCESS=.*/ALLOW_INSECURE_ACCESS=true/' /root/jail_options.env
+            log_info "Updated ALLOW_INSECURE_ACCESS to true in jail_options.env"
+        else
+            echo "ALLOW_INSECURE_ACCESS=true" >> /root/jail_options.env
+            log_info "Added ALLOW_INSECURE_ACCESS=true to jail_options.env"
+        fi
     fi
 
     # Restore SSL certificates based on previous state
