@@ -134,6 +134,10 @@ MYSQL_STARTED=0
 log_step_start "Ensuring database service is running"
 case "$DETECTED_DB_TYPE" in
     "$DB_TYPE_POSTGRESQL")
+        # Ensure PostgreSQL log directory exists with proper permissions
+        mkdir -p /var/log/postgresql
+        chown postgres:postgres /var/log/postgresql 2>/dev/null || true
+        
         if ! service postgresql status >/dev/null 2>&1; then
             log_info "Starting PostgreSQL..."
             service postgresql start 2>/dev/null || true

@@ -82,6 +82,10 @@ sysrc -f /etc/rc.conf fail2ban_enable="YES"
 
 chmod 777 /tmp
 
+# Create PostgreSQL log directory with proper permissions
+mkdir -p /var/log/postgresql
+chown postgres:postgres /var/log/postgresql 2>/dev/null || true
+
 # Initialize PostgreSQL
 echo "Initializing PostgreSQL..."
 # Set authentication options to suppress initdb warning about "trust" authentication
