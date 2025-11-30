@@ -270,9 +270,11 @@ cat "$MYSQL_BACKUP" | \
     sed '/^UNLOCK TABLES/d' | \
     sed '/^--/d' | \
     sed 's/[[:space:]]user[[:space:]]/ "user" /gi' | \
+    sed 's/, user,/, "user",/gi' | \
     sed 's/,user,/,"user",/gi' | \
     sed 's/(user,/("user",/gi' | \
-    sed 's/,user))/,"user")/gi' | \
+    sed 's/, user)/, "user")/gi' | \
+    sed 's/,user)/,"user")/gi' | \
     grep -v "^$" | \
     awk '
     {
