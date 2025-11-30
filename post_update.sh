@@ -276,6 +276,10 @@ start_or_restart_service "redis"
 # Start/Restart the appropriate database
 # Check which database is enabled in rc.conf to avoid checking non-existent services
 if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+    # Ensure PostgreSQL log directory exists with proper permissions
+    mkdir -p /var/log/postgresql
+    chown postgres:postgres /var/log/postgresql 2>/dev/null || true
+    
     # Check if PostgreSQL needs initialization (MySQL to PostgreSQL transition)
     # Look for any postgres data directory (supports different PostgreSQL versions)
     PG_DATA_FOUND=0
