@@ -164,25 +164,6 @@ else
     echo "PostgreSQL is running."
 fi
 
-# Check if pgloader is installed
-PGLOADER_AVAILABLE=0
-if command -v pgloader >/dev/null 2>&1; then
-    PGLOADER_AVAILABLE=1
-    if [ "$AUTO_MODE" = "1" ]; then
-        log_info "pgloader is available for direct migration."
-    else
-        echo "pgloader is available for direct migration."
-    fi
-else
-    if [ "$AUTO_MODE" = "0" ]; then
-        echo "pgloader is NOT installed."
-        echo ""
-        echo "To install pgloader (recommended for automatic migration):"
-        echo "  pkg install pgloader"
-        echo ""
-    fi
-fi
-
 # In auto mode, skip the confirmation prompt
 if [ "$AUTO_MODE" = "0" ]; then
     echo ""
@@ -232,8 +213,7 @@ else
 fi
 
 # Attempt to convert and import MySQL dump to PostgreSQL
-# Note: This uses basic sed transformations since MySQL is no longer available
-# For complex databases, using pgloader with a temporary MySQL instance is recommended
+# Note: This uses sed transformations to convert MySQL syntax to PostgreSQL
 if [ "$AUTO_MODE" = "1" ]; then
     log_info "Converting MySQL dump to PostgreSQL format..."
     log_info "This may take a while depending on database size..."
@@ -246,17 +226,23 @@ fi
 # Create a temporary converted SQL file
 CONVERTED_SQL="/tmp/nextcloud_pg_converted.sql"
 
-# Basic MySQL to PostgreSQL conversion
-# This handles common differences but may not cover all cases
+# MySQL to PostgreSQL conversion
+# This handles common differences between MySQL and PostgreSQL SQL syntax
 cat "$MYSQL_BACKUP" | \
     sed 's/`//g' | \
     sed 's/ENGINE=InnoDB[^;]*//gi' | \
     sed 's/ENGINE=MyISAM[^;]*//gi' | \
     sed 's/DEFAULT CHARSET=[a-zA-Z0-9_]*//gi' | \
     sed 's/COLLATE=[a-zA-Z0-9_]*//gi' | \
+    sed 's/COLLATE [a-zA-Z0-9_]*//gi' | \
     sed 's/AUTO_INCREMENT=[0-9]*//gi' | \
-    sed 's/AUTO_INCREMENT/SERIAL/gi' | \
     sed 's/UNSIGNED//gi' | \
+    sed 's/  */ /g' | \
+    sed 's/bigint([0-9]*) NOT NULL AUTO_INCREMENT/BIGSERIAL/gi' | \
+    sed 's/bigint NOT NULL AUTO_INCREMENT/BIGSERIAL/gi' | \
+    sed 's/int([0-9]*) NOT NULL AUTO_INCREMENT/SERIAL/gi' | \
+    sed 's/int NOT NULL AUTO_INCREMENT/SERIAL/gi' | \
+    sed 's/AUTO_INCREMENT/SERIAL/gi' | \
     sed 's/\\'\''/'\'\''/g' | \
     sed 's/TINYINT(1)/BOOLEAN/gi' | \
     sed 's/TINYINT([0-9]*)/SMALLINT/gi' | \
@@ -275,12 +261,30 @@ cat "$MYSQL_BACKUP" | \
     sed 's/BLOB/BYTEA/gi' | \
     sed 's/VARBINARY([0-9]*)/BYTEA/gi' | \
     sed 's/BINARY([0-9]*)/BYTEA/gi' | \
+    sed '/^[[:space:]]*KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
+    sed '/^[[:space:]]*UNIQUE KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
+    sed '/^[[:space:]]*FULLTEXT KEY [a-zA-Z0-9_]* ([^)]*),*$/d' | \
     sed '/^\/\*!.*\*\/;$/d' | \
     sed '/^SET /d' | \
     sed '/^LOCK TABLES/d' | \
     sed '/^UNLOCK TABLES/d' | \
     sed '/^--/d' | \
-    grep -v "^$" > "$CONVERTED_SQL" || true
+    grep -v "^$" | \
+    awk '
+    {
+        if (NR > 1) {
+            # If current line starts with ), remove trailing comma from previous line
+            if ($0 ~ /^[[:space:]]*\)/) {
+                gsub(/,[[:space:]]*$/, "", prev_line)
+            }
+            print prev_line
+        }
+        prev_line = $0
+    }
+    END {
+        print prev_line
+    }
+    ' > "$CONVERTED_SQL" || true
 
 IMPORT_SUCCESS=0
 if [ -s "$CONVERTED_SQL" ]; then
@@ -336,7 +340,7 @@ if [ "$IMPORT_SUCCESS" = "0" ]; then
         log_warn "========================================"
         log_warn "The automatic SQL conversion could not complete successfully."
         log_warn "Your MySQL backup is preserved at: $MYSQL_BACKUP"
-        log_warn "Manual migration may be required using pgloader or fresh install."
+        log_warn "You may need to do a fresh Nextcloud installation."
         log_warn "========================================"
     else
         echo ""
@@ -344,18 +348,14 @@ if [ "$IMPORT_SUCCESS" = "0" ]; then
         echo "MANUAL MIGRATION MAY BE REQUIRED"
         echo "========================================"
         echo ""
-        if [ "$PGLOADER_AVAILABLE" = "1" ]; then
-            echo "pgloader is installed but requires a live MySQL connection."
-        else
-            echo "For the best migration experience, install pgloader:"
-            echo "  pkg install pgloader"
-        fi
+        echo "The automatic SQL conversion could not complete successfully."
+        echo "Your MySQL backup is preserved at: $MYSQL_BACKUP"
         echo ""
-        echo "To use pgloader for migration:"
-        echo "  1. Set up a temporary MySQL instance on another machine"
-        echo "  2. Restore your backup: mysql -u root < $MYSQL_BACKUP"
-        echo "  3. Run: pgloader mysql://$DB_USER:PASSWORD@mysql-host/$DB_NAME \\"
-        echo "                 pgsql://$DB_USER:PASSWORD@localhost/$DB_NAME"
+        echo "You can do a fresh Nextcloud installation:"
+        echo "  1. Access the web interface"
+        echo "  2. Complete the setup wizard"
+        echo "  3. Your files in the data directory will still be there"
+        echo "     (but user accounts and settings will need to be recreated)"
         echo ""
         echo "Your MySQL backup is preserved at: $MYSQL_BACKUP"
         echo "========================================"
@@ -489,22 +489,17 @@ else
         log_warn "PostgreSQL database appears empty (0 tables)."
         log_warn "The automatic conversion may have failed."
         log_warn "Your MySQL backup is preserved at: $MYSQL_BACKUP"
-        log_warn "Manual migration may be required or you can do a fresh Nextcloud installation."
+        log_warn "You may need to do a fresh Nextcloud installation."
         log_step_end "Automatic MySQL to PostgreSQL Migration" "failed - empty database"
         # Exit with failure so post_update.sh knows to skip occ commands
         exit 1
     else
         echo "WARNING: PostgreSQL database appears empty (0 tables)."
         echo ""
-        echo "The automatic conversion may have failed. Manual steps required:"
-        echo ""
-        echo "1. Install pgloader: pkg install pgloader"
-        echo "2. Set up a temporary MySQL instance with your backup"
-        echo "3. Use pgloader for direct MySQL to PostgreSQL migration"
-        echo ""
+        echo "The automatic conversion may have failed."
         echo "Your MySQL backup is preserved at: $MYSQL_BACKUP"
         echo ""
-        echo "Alternatively, you can do a fresh Nextcloud installation:"
+        echo "You can do a fresh Nextcloud installation:"
         echo "  1. Access the web interface"
         echo "  2. Complete the setup wizard"
         echo "  3. Your files in the data directory will still be there"
