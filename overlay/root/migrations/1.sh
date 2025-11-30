@@ -155,9 +155,13 @@ if [ "$NEEDS_DB_CONFIG_UPDATE" = "1" ]; then
     if [ -z "$DB_PASS" ]; then
         log_warn "No database password found, generating new one..."
         export LC_ALL=C
+        # Use hex encoding for password to avoid special characters that could cause issues
         openssl rand --hex 8 > /root/dbpassword
         DB_PASS=$(cat /root/dbpassword)
     fi
+    
+    # Escape single quotes in password for PostgreSQL SQL commands (double single quotes)
+    DB_PASS_SQL=$(printf '%s' "$DB_PASS" | sed "s/'/''/g")
     
     # Ensure PostgreSQL is running and ready
     log_info "Ensuring PostgreSQL is running..."
@@ -175,41 +179,46 @@ if [ "$NEEDS_DB_CONFIG_UPDATE" = "1" ]; then
     else
         # Create PostgreSQL database and user if they don't exist
         log_info "Creating PostgreSQL database and user..."
-        su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\"" 2>/dev/null || log_info "User $DB_USER may already exist"
+        su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS_SQL';\"" 2>/dev/null || log_info "User $DB_USER may already exist"
         su -m postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER ENCODING 'UTF8' TEMPLATE template0;\"" 2>/dev/null || log_info "Database $DB_NAME may already exist"
         su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" 2>/dev/null || true
         su -m postgres -c "psql -d $DB_NAME -c \"GRANT ALL ON SCHEMA public TO $DB_USER;\"" 2>/dev/null || true
         
         # Update config.php to use PostgreSQL instead of MySQL
-        # Use sed to update the database settings
+        # Use PHP to update the config file safely (handles special characters in values properly)
         log_info "Updating database settings in config.php..."
         
-        # Update dbtype from mysql to pgsql
-        sed -i.bak "s/'dbtype' *=> *'mysql'/'dbtype' => 'pgsql'/" "$NC_CONFIG_FILE"
-        
-        # Update dbhost to localhost (in case it was using a socket path)
-        sed -i "s/'dbhost' *=> *'[^']*'/'dbhost' => 'localhost'/" "$NC_CONFIG_FILE"
-        
-        # Update dbport to 5432 (PostgreSQL default)
-        sed -i "s/'dbport' *=> *'[^']*'/'dbport' => '5432'/" "$NC_CONFIG_FILE"
-        
-        # Update dbuser
-        sed -i "s/'dbuser' *=> *'[^']*'/'dbuser' => '$DB_USER'/" "$NC_CONFIG_FILE"
-        
-        # Update dbpassword
-        sed -i "s/'dbpassword' *=> *'[^']*'/'dbpassword' => '$DB_PASS'/" "$NC_CONFIG_FILE"
-        
-        # Remove mysql.utf8mb4 setting which is MySQL-specific
-        sed -i "/'mysql\.utf8mb4'/d" "$NC_CONFIG_FILE"
-        
-        # Set installed to false since we need to reinstall with PostgreSQL
-        # This allows the installation wizard to set up the database tables
-        sed -i "s/'installed' *=> *true/'installed' => false/" "$NC_CONFIG_FILE"
-        
-        log_info "config.php updated for PostgreSQL"
-        
-        # Clean up backup
-        rm -f "${NC_CONFIG_FILE}.bak"
+        # Use PHP to update the config.php safely
+        # This is the most reliable way since config.php is a PHP file
+        php -r "
+\$configFile = '$NC_CONFIG_FILE';
+include \$configFile;
+\$config = \$CONFIG;
+
+// Update database settings
+\$config['dbtype'] = 'pgsql';
+\$config['dbhost'] = 'localhost';
+\$config['dbport'] = '5432';
+\$config['dbuser'] = '$DB_USER';
+\$config['dbpassword'] = '$DB_PASS';
+\$config['installed'] = false;
+
+// Remove MySQL-specific setting
+if (isset(\$config['mysql.utf8mb4'])) {
+    unset(\$config['mysql.utf8mb4']);
+}
+
+// Write back the config
+\$content = \"<?php\n\\\$CONFIG = \" . var_export(\$config, true) . \";\n\";
+file_put_contents(\$configFile, \$content);
+echo 'Config updated successfully';
+" 2>/dev/null
+
+        if [ $? -eq 0 ]; then
+            log_info "config.php updated for PostgreSQL"
+        else
+            log_error "Failed to update config.php using PHP"
+        fi
         
         log_warn "=========================================="
         log_warn "IMPORTANT: MySQL to PostgreSQL Migration"
