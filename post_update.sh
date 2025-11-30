@@ -18,6 +18,59 @@ else
     echo "========================================"
 fi
 
+# Helper function to wait for a service to be ready after start/restart
+# Args: service_name, max_attempts (default 15)
+wait_for_service_ready() {
+    svc_name="$1"
+    max_wait="${2:-15}"
+    svc_attempt=0
+    
+    case "$svc_name" in
+        redis)
+            # Wait for Redis to accept connections
+            while [ $svc_attempt -lt "$max_wait" ]; do
+                if redis-cli ping >/dev/null 2>&1; then
+                    log_info "Redis is ready (accepting connections)"
+                    return 0
+                fi
+                svc_attempt=$((svc_attempt + 1))
+                log_info "Waiting for Redis to be ready... (attempt $svc_attempt of $max_wait)"
+                sleep 1
+            done
+            log_warn "Redis did not become ready in time"
+            return 1
+            ;;
+        postgresql)
+            # Wait for PostgreSQL to accept connections
+            while [ $svc_attempt -lt "$max_wait" ]; do
+                if su -m postgres -c "psql -c 'SELECT 1'" >/dev/null 2>&1; then
+                    log_info "PostgreSQL is ready (accepting connections)"
+                    return 0
+                fi
+                svc_attempt=$((svc_attempt + 1))
+                log_info "Waiting for PostgreSQL to be ready... (attempt $svc_attempt of $max_wait)"
+                sleep 1
+            done
+            log_warn "PostgreSQL did not become ready in time"
+            return 1
+            ;;
+        *)
+            # For other services, just check if the service status reports running
+            while [ $svc_attempt -lt "$max_wait" ]; do
+                if service "$svc_name" status >/dev/null 2>&1; then
+                    log_info "Service $svc_name is running"
+                    return 0
+                fi
+                svc_attempt=$((svc_attempt + 1))
+                log_info "Waiting for $svc_name to start... (attempt $svc_attempt of $max_wait)"
+                sleep 1
+            done
+            log_warn "Service $svc_name did not start in time"
+            return 1
+            ;;
+    esac
+}
+
 # Helper function to start or restart a service
 # If the service is running, restart it. If not running but enabled, start it.
 start_or_restart_service() {
@@ -29,7 +82,14 @@ start_or_restart_service() {
     # Try primary service name first
     if service "$service_name" status >/dev/null 2>&1; then
         log_info "Service $service_name is running, restarting..."
-        service "$service_name" restart 2>/dev/null || true
+        # Stop the service first and wait for it to fully stop
+        service "$service_name" stop 2>/dev/null || true
+        # Give the service time to clean up properly
+        sleep 2
+        # Now start the service
+        service "$service_name" start 2>/dev/null || true
+        # Wait for the service to be ready
+        wait_for_service_ready "$service_name" 15
         log_info "Service $service_name restarted"
         return 0
     fi
@@ -39,7 +99,11 @@ start_or_restart_service() {
         log_info "Trying alternative service name: $alt_name"
         if service "$alt_name" status >/dev/null 2>&1; then
             log_info "Service $alt_name is running, restarting..."
-            service "$alt_name" restart 2>/dev/null || true
+            # Stop the service first and wait for it to fully stop
+            service "$alt_name" stop 2>/dev/null || true
+            sleep 2
+            service "$alt_name" start 2>/dev/null || true
+            wait_for_service_ready "$alt_name" 15
             log_info "Service $alt_name restarted"
             return 0
         fi
@@ -48,6 +112,7 @@ start_or_restart_service() {
     # Service is not running - try to start it if enabled in rc.conf
     log_info "Service $service_name not running, attempting to start..."
     if service "$service_name" start >/dev/null 2>&1; then
+        wait_for_service_ready "$service_name" 15
         log_info "Service $service_name started"
         return 0
     fi
@@ -56,6 +121,7 @@ start_or_restart_service() {
     if [ -n "$alt_name" ]; then
         log_info "Trying to start alternative service: $alt_name"
         if service "$alt_name" start >/dev/null 2>&1; then
+            wait_for_service_ready "$alt_name" 15
             log_info "Service $alt_name started"
             return 0
         fi
