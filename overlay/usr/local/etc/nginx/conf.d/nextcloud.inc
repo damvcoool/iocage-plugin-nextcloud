@@ -5,13 +5,13 @@ root /usr/local/www/nextcloud/;
 server_tokens off;
 
 # set max upload size
-client_max_body_size 512M;
+client_max_body_size 1024M;
 fastcgi_buffers 64 4K;
 
 # Enable gzip but do not remove ETag headers
 gzip on;
 gzip_vary on;
-gzip_comp_level 4;
+gzip_comp_level 9;
 gzip_min_length 256;
 gzip_proxied expired no-cache no-store private no_last_modified no_etag auth;
 gzip_types application/atom+xml application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/wasm application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/javascript text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
@@ -26,6 +26,7 @@ gzip_types application/atom+xml application/javascript application/json applicat
 client_body_buffer_size 512k;
 
 # HTTP response headers borrowed from Nextcloud `.htaccess`
+add_header Strict-Transport-Security            "max-age=31536000; includeSubDomains; preload";
 add_header Referrer-Policy                      "no-referrer"   always;
 add_header X-Content-Type-Options               "nosniff"       always;
 add_header X-Download-Options                   "noopen"        always;
