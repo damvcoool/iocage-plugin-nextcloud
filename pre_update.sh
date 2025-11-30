@@ -302,7 +302,7 @@ fi
 log_step_end "Checking ALLOW_INSECURE_ACCESS state"
 log_step_end "Backing up SSL certificates and detecting SSL state"
 
-# Perform database backup (database type already detected and service already started above)
+# Perform database backup
 log_step_start "Performing database backup"
 case "$DETECTED_DB_TYPE" in
     "$DB_TYPE_POSTGRESQL")
@@ -344,10 +344,9 @@ case "$DETECTED_DB_TYPE" in
         log_info "No database to backup"
         ;;
 esac
-log_step_end "Performing database backup"
-
 echo "$DETECTED_DB_TYPE" > "$BACKUP_DIR/database_type.txt"
 log_info "Database type saved: $DETECTED_DB_TYPE"
+log_step_end "Performing database backup"
 
 # Save current migration state
 log_step_start "Saving migration state"
