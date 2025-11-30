@@ -246,7 +246,7 @@ attempt=0
 
 if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
     log_info "Checking PostgreSQL readiness..."
-    until su -m postgres -c "psql -c 'SELECT 1' >/dev/null 2>&1" || [ $attempt -eq $max_attempts ]
+    until su -m postgres -c "psql -c 'SELECT 1'" >/dev/null 2>&1 || [ $attempt -eq $max_attempts ]
     do
         attempt=$((attempt + 1))
         log_info "PostgreSQL is unavailable - attempt $attempt of $max_attempts"

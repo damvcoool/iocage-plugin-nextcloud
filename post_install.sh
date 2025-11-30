@@ -117,7 +117,7 @@ NCPASS=$(cat /root/ncpassword)
 echo "Waiting for PostgreSQL to be ready..."
 max_attempts=30
 attempt=0
-until su -m postgres -c "psql -c 'SELECT 1' >/dev/null 2>&1" || [ $attempt -eq $max_attempts ]
+until su -m postgres -c "psql -c 'SELECT 1'" >/dev/null 2>&1 || [ $attempt -eq $max_attempts ]
 do
     attempt=$((attempt + 1))
     echo "PostgreSQL is unavailable - attempt $attempt of $max_attempts"
