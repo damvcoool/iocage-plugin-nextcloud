@@ -372,6 +372,59 @@ else
 fi
 log_step_end "Waiting for database to be ready"
 
+# Check if we need to run MySQL to PostgreSQL migration
+# This happens when the previous database was MySQL and now we're on PostgreSQL
+log_step_start "Checking for MySQL to PostgreSQL migration"
+MIGRATION_NEEDED=0
+MIGRATION_SUCCESS=1
+PREVIOUS_DB_TYPE=""
+
+if [ -n "$PRE_UPDATE_BACKUP" ] && [ -f "$PRE_UPDATE_BACKUP/database_type.txt" ]; then
+    PREVIOUS_DB_TYPE=$(cat "$PRE_UPDATE_BACKUP/database_type.txt")
+    log_info "Previous database type: $PREVIOUS_DB_TYPE"
+    
+    if [ "$PREVIOUS_DB_TYPE" = "mysql" ]; then
+        # Previous DB was MySQL - check if PostgreSQL has Nextcloud data
+        if grep -q 'postgresql_enable="YES"' /etc/rc.conf 2>/dev/null; then
+            # Check if PostgreSQL database has Nextcloud tables
+            if su -m postgres -c "psql -d nextcloud -c \"SELECT 1 FROM oc_users LIMIT 1\"" >/dev/null 2>&1; then
+                log_info "PostgreSQL already has Nextcloud data - migration not needed"
+            else
+                log_info "Previous DB was MySQL and PostgreSQL is empty - automatic migration needed"
+                MIGRATION_NEEDED=1
+                
+                # Check if MySQL backup exists
+                if [ -f "$PRE_UPDATE_BACKUP/nextcloud_mysql.sql" ]; then
+                    log_info "MySQL backup found at: $PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
+                    log_step_start "Running automatic MySQL to PostgreSQL migration"
+                    
+                    # Run the migration script in auto mode
+                    if /root/migrate_mysql_to_postgresql.sh --auto; then
+                        log_info "Automatic MySQL to PostgreSQL migration completed successfully"
+                        MIGRATION_SUCCESS=1
+                    else
+                        log_warn "Automatic MySQL to PostgreSQL migration failed"
+                        log_warn "Your MySQL backup is preserved at: $PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
+                        log_warn "You can try running /root/migrate_mysql_to_postgresql.sh manually"
+                        log_warn "Skipping Nextcloud occ commands since database is not ready"
+                        MIGRATION_SUCCESS=0
+                    fi
+                    
+                    log_step_end "Running automatic MySQL to PostgreSQL migration"
+                else
+                    log_warn "MySQL backup not found at $PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
+                    log_warn "Cannot perform automatic migration - manual intervention required"
+                    log_warn "Skipping Nextcloud occ commands since database is not ready"
+                    MIGRATION_SUCCESS=0
+                fi
+            fi
+        fi
+    fi
+else
+    log_info "No previous database type recorded - assuming normal upgrade"
+fi
+log_step_end "Checking for MySQL to PostgreSQL migration"
+
 # Fix installed flag if it was incorrectly set to false
 # This can happen if a MySQL to PostgreSQL migration was started but the data already exists
 log_step_start "Verifying Nextcloud installation state"
@@ -420,41 +473,57 @@ else
 fi
 log_step_end "Verifying Nextcloud installation state"
 
-# Run Nextcloud upgrade if needed
-log_step_start "Running Nextcloud upgrade"
-log_info "Executing: occ upgrade"
-su -m www -c "php /usr/local/www/nextcloud/occ upgrade" 2>/dev/null || true
-log_step_end "Running Nextcloud upgrade"
+# Only run occ commands if migration was successful or not needed
+if [ "$MIGRATION_SUCCESS" = "1" ]; then
+    # Run Nextcloud upgrade if needed
+    log_step_start "Running Nextcloud upgrade"
+    log_info "Executing: occ upgrade"
+    su -m www -c "php /usr/local/www/nextcloud/occ upgrade" 2>/dev/null || true
+    log_step_end "Running Nextcloud upgrade"
 
-# Verify and repair Nextcloud data
-log_step_start "Verifying and repairing Nextcloud data"
-log_info "Executing: occ maintenance:repair"
-su -m www -c "php /usr/local/www/nextcloud/occ maintenance:repair" 2>/dev/null || true
-log_step_end "Verifying and repairing Nextcloud data"
+    # Verify and repair Nextcloud data
+    log_step_start "Verifying and repairing Nextcloud data"
+    log_info "Executing: occ maintenance:repair"
+    su -m www -c "php /usr/local/www/nextcloud/occ maintenance:repair" 2>/dev/null || true
+    log_step_end "Verifying and repairing Nextcloud data"
 
-# Add missing database indices and columns
-log_step_start "Adding missing database indices and columns"
-log_info "Executing: occ db:add-missing-indices"
-su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-indices" 2>/dev/null || true
-log_info "Executing: occ db:add-missing-columns"
-su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-columns" 2>/dev/null || true
-log_info "Executing: occ db:add-missing-primary-keys"
-su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-primary-keys" 2>/dev/null || true
-log_info "Executing: occ db:convert-filecache-bigint"
-su -m www -c "php /usr/local/www/nextcloud/occ db:convert-filecache-bigint --no-interaction" 2>/dev/null || true
-log_step_end "Adding missing database indices and columns"
+    # Add missing database indices and columns
+    log_step_start "Adding missing database indices and columns"
+    log_info "Executing: occ db:add-missing-indices"
+    su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-indices" 2>/dev/null || true
+    log_info "Executing: occ db:add-missing-columns"
+    su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-columns" 2>/dev/null || true
+    log_info "Executing: occ db:add-missing-primary-keys"
+    su -m www -c "php /usr/local/www/nextcloud/occ db:add-missing-primary-keys" 2>/dev/null || true
+    log_info "Executing: occ db:convert-filecache-bigint"
+    su -m www -c "php /usr/local/www/nextcloud/occ db:convert-filecache-bigint --no-interaction" 2>/dev/null || true
+    log_step_end "Adding missing database indices and columns"
 
-# Update all apps if needed
-log_step_start "Updating Nextcloud apps"
-log_info "Executing: occ app:update --all"
-su -m www -c "php /usr/local/www/nextcloud/occ app:update --all" 2>/dev/null || true
-log_step_end "Updating Nextcloud apps"
+    # Update all apps if needed
+    log_step_start "Updating Nextcloud apps"
+    log_info "Executing: occ app:update --all"
+    su -m www -c "php /usr/local/www/nextcloud/occ app:update --all" 2>/dev/null || true
+    log_step_end "Updating Nextcloud apps"
 
-# Disable maintenance mode
-log_step_start "Disabling maintenance mode"
-su -m www -c "php /usr/local/www/nextcloud/occ maintenance:mode --off" 2>/dev/null || true
-log_info "Maintenance mode disabled"
-log_step_end "Disabling maintenance mode"
+    # Disable maintenance mode
+    log_step_start "Disabling maintenance mode"
+    su -m www -c "php /usr/local/www/nextcloud/occ maintenance:mode --off" 2>/dev/null || true
+    log_info "Maintenance mode disabled"
+    log_step_end "Disabling maintenance mode"
+else
+    log_warn "========================================"
+    log_warn "SKIPPING NEXTCLOUD OCC COMMANDS"
+    log_warn "========================================"
+    log_warn "Database migration was not successful."
+    log_warn "Nextcloud occ commands have been skipped to prevent errors."
+    log_warn ""
+    log_warn "To complete the upgrade:"
+    log_warn "  1. Run /root/migrate_mysql_to_postgresql.sh manually"
+    log_warn "  2. Or perform a fresh Nextcloud installation via the web interface"
+    log_warn ""
+    log_warn "Your MySQL backup is available at: $PRE_UPDATE_BACKUP/nextcloud_mysql.sql"
+    log_warn "========================================"
+fi
 
 # Log completion
 if [ -f /usr/local/bin/log_helper ]; then
