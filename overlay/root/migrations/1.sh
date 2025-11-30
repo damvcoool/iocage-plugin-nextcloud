@@ -155,7 +155,8 @@ if [ "$NEEDS_DB_CONFIG_UPDATE" = "1" ]; then
     if [ -z "$DB_PASS" ]; then
         log_warn "No database password found, generating new one..."
         export LC_ALL=C
-        # Use hex encoding for password to avoid special characters that could cause issues
+        # Use hex encoding for password to avoid special characters
+        # Using 8 bytes (16 hex chars) consistent with post_install.sh
         openssl rand --hex 8 > /root/dbpassword
         DB_PASS=$(cat /root/dbpassword)
     fi
@@ -178,8 +179,9 @@ if [ "$NEEDS_DB_CONFIG_UPDATE" = "1" ]; then
         log_error "PostgreSQL failed to start - cannot update database configuration"
     else
         # Create PostgreSQL database and user if they don't exist
+        # Use NOSUPERUSER, NOCREATEDB, NOCREATEROLE for least privilege
         log_info "Creating PostgreSQL database and user..."
-        su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS_SQL';\"" 2>/dev/null || log_info "User $DB_USER may already exist"
+        su -m postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS_SQL' NOSUPERUSER NOCREATEDB NOCREATEROLE;\"" 2>/dev/null || log_info "User $DB_USER may already exist"
         su -m postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER ENCODING 'UTF8' TEMPLATE template0;\"" 2>/dev/null || log_info "Database $DB_NAME may already exist"
         su -m postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" 2>/dev/null || true
         su -m postgres -c "psql -d $DB_NAME -c \"GRANT ALL ON SCHEMA public TO $DB_USER;\"" 2>/dev/null || true
@@ -218,12 +220,13 @@ if (isset($config["mysql.utf8mb4"])) {
 $content = "<?php\n\$CONFIG = " . var_export($config, true) . ";\n";
 file_put_contents($configFile, $content);
 echo "Config updated successfully";
-' 2>/dev/null
-
+'
+        PHP_EXIT_STATUS=$?
+        
         # Unset the exported variables for security
         unset NC_DB_USER NC_DB_PASS NC_CONFIG_PATH
 
-        if [ $? -eq 0 ]; then
+        if [ $PHP_EXIT_STATUS -eq 0 ]; then
             log_info "config.php updated for PostgreSQL"
         else
             log_error "Failed to update config.php using PHP"
