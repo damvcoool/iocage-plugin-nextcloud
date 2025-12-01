@@ -1,10 +1,22 @@
 #!/bin/sh
 
-# Very simple script to return the default passwords created for the database
-case $1 in
-	dbname) cat /root/dbname ;;
-	dbuser) cat /root/dbuser ;;
-	dbpassword) cat /root/dbpassword ;;
-	ncuser) cat /root/ncuser ;;
-	ncpassword) cat /root/ncpassword ;;
+set -eu
+
+# Script to return plugin settings (database credentials)
+# Returns empty string if the requested setting doesn't exist
+
+get_setting() {
+    file="/root/$1"
+    if [ -f "$file" ]; then
+        cat "$file"
+    fi
+}
+
+case "${1:-}" in
+    dbname) get_setting dbname ;;
+    dbuser) get_setting dbuser ;;
+    dbpassword) get_setting dbpassword ;;
+    ncuser) get_setting ncuser ;;
+    ncpassword) get_setting ncpassword ;;
+    *) echo "" ;;
 esac
