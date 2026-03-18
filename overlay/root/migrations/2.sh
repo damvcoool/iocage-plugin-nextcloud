@@ -168,6 +168,33 @@ fi
 # Check if MySQL is running and has data (live MySQL scenario without pre_update)
 log_info "Checking if MySQL is running..."
 if ! service mysql-server status >/dev/null 2>&1; then
+    # Before treating this as a fresh install, check whether an older PostgreSQL
+    # data directory exists (e.g. data17).  If it does, this is a major-version
+    # upgrade scenario — migration 3 will handle the data-directory transition.
+    # Initialising a fresh data18 here would silently wipe the existing data.
+    OLD_PG_DATA_EXISTS=0
+    for pg_data_dir in /var/db/postgres/data[0-9]*; do
+        if [ -d "$pg_data_dir" ]; then
+            ver=$(basename "$pg_data_dir" | sed 's/^data//')
+            # Only act on purely numeric version strings to avoid false matches
+            # from directories like 'data_backup' or 'data_old'.
+            case "$ver" in
+                ''|*[!0-9]*) continue ;;
+            esac
+            if [ "$ver" != "18" ]; then
+                OLD_PG_DATA_EXISTS=1
+                log_info "Found old PostgreSQL data directory: $pg_data_dir (version $ver)"
+                log_info "Skipping fresh init — PostgreSQL version upgrade will be handled by migration 3"
+                break
+            fi
+        fi
+    done
+
+    if [ "$OLD_PG_DATA_EXISTS" = "1" ]; then
+        log_step_end "Migration 2: MySQL to PostgreSQL 18" "skipped - PostgreSQL version upgrade pending"
+        exit 0
+    fi
+
     log_info "MySQL not running - this appears to be a fresh install"
     log_info "Initializing PostgreSQL for new installation..."
     
