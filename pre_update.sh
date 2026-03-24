@@ -309,6 +309,24 @@ log_step_start "Performing database backup"
 case "$DETECTED_DB_TYPE" in
     "$DB_TYPE_POSTGRESQL")
         log_info "PostgreSQL detected, creating backup..."
+        # Detect and save the current PostgreSQL major version so later migrations
+        # can determine whether a major-version data-directory upgrade is needed.
+        # psql --version outputs e.g. "psql (PostgreSQL) 17.2" or "psql (PostgreSQL) 18.1"
+        # We extract the first numeric component (major version number).
+        _pg_ver_raw=$(su -m postgres -c "psql --version" 2>/dev/null | awk '{print $3}' | cut -d. -f1 || echo "")
+        # Validate that we got a pure integer before saving
+        case "$_pg_ver_raw" in
+            ''|*[!0-9]*) log_warn "Could not determine PostgreSQL major version (got: '$_pg_ver_raw')" ;;
+            *)
+                PG_MAJOR_VERSION="$_pg_ver_raw"
+                echo "$PG_MAJOR_VERSION" > "$BACKUP_DIR/pg_version.txt"
+                log_info "PostgreSQL major version: $PG_MAJOR_VERSION"
+                ;;
+        esac
+        # Dump global objects (roles/users) needed when restoring into a fresh cluster
+        # after a major-version upgrade (e.g. PG17 -> PG18).
+        log_info "Running pg_dumpall (globals only)..."
+        su -m postgres -c "pg_dumpall --globals-only" > "$BACKUP_DIR/nextcloud_pg_globals.sql" 2>/dev/null || true
         if [ -n "$DB_PASS" ]; then
             log_info "Running pg_dump..."
             PGPASSWORD="$DB_PASS" pg_dump -U "$DB_USER" -h localhost "$DB_NAME" > "$BACKUP_DIR/nextcloud_pg.sql" 2>/dev/null || true
@@ -426,7 +444,7 @@ if [ "$DETECTED_DB_TYPE" = "$DB_TYPE_MYSQL" ]; then
     
     # Install PostgreSQL if not already installed
     log_info "Installing PostgreSQL..."
-    if pkg install -y postgresql17-server postgresql17-client >/dev/null 2>&1; then
+    if pkg install -y postgresql18-server postgresql18-client >/dev/null 2>&1; then
         log_info "PostgreSQL installed successfully"
     else
         log_warn "PostgreSQL may already be installed or installation failed"
